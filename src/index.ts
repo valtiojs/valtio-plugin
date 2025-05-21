@@ -130,6 +130,7 @@ const initializePluginSystem = () => {
 
       // Propagate "root proxy" metadata to nested objects so there's
       // no need to traverse through objects when modifying nested values
+      // in order to know which "instance" we're working with
 
       /**
        * Get trap
@@ -525,3 +526,4 @@ export function proxyInstance(): ProxyFactory {
 
   return proxyFn as ProxyFactory
 }
+

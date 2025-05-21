@@ -71,19 +71,28 @@ describe('Valtio Plugin System', () => {
     it('should create independent instances', () => {
       const proxy1 = proxyInstance();
       const proxy2 = proxyInstance();
+      const proxy3 = proxyInstance()
+      const proxy4 = proxyInstance()
       expect(proxy1).not.toBe(proxy2);
+
+
       
       // Register a plugin with proxy1 but not proxy2
       const testPlugin = createTestPlugin();
       proxy1.use(testPlugin);
       
       // Create stores
-      const store1 = proxy1({ count: 0 });
+      const store4 = proxy4({ count: 0 })
+      const store1 = proxy1({ count: 0, s: store4 });
       const store2 = proxy2({ count: 0 });
+      const store3 = proxy3({ s: store1 })
+      store3.s.count++
+      store1.count++
       
       // Plugin should be initialized for store1 but not store2
       if (testPlugin.api) {
         expect(testPlugin.api.getSpy('onInit')).toHaveBeenCalledTimes(1);
+        expect(testPlugin.api.getSpy('beforeChange')).toHaveBeenCalledTimes(2)
       }
       
       // Plugin should be accessible from proxy1 but not proxy2
@@ -91,7 +100,7 @@ describe('Valtio Plugin System', () => {
       expect(proxy2[TEST_PLUGIN_SYMBOL]).toBeUndefined();
     });
   });
-  
+
   describe('plugin.use()', () => {
     it('should register a single plugin', () => {
       const proxy = proxyInstance();

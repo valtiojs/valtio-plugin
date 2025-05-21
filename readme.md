@@ -209,7 +209,127 @@ proxy.dispose()
 
 ## Available Plugins
 
-None yet! Hopefully many to come.
+### Standard Schema Plugin
+
+The Standard Schema Plugin provides runtime validation for your Valtio state using the Standard Schema specification. It supports various schema validation libraries that implement the Standard Schema spec, including Zod, Valibot, Arktype, and more.
+
+#### Installation
+
+```bash
+# npm
+npm install valtio valtio-plugin
+
+# For Zod integration
+npm install zod
+
+# For Valibot integration
+npm install valibot
+
+# For Arktype integration
+npm install arktype
+```
+
+#### Usage
+
+```typescript
+import { proxyInstance, standardSchemaPlugin } from 'valtio-plugin'
+import * as z from 'zod'
+
+// Create the validation plugin
+const { schema, schemaSymbol } = standardSchemaPlugin()
+
+// Create a proxy factory with plugin support
+const proxy = proxyInstance()
+
+// Register the standard schema plugin with validation rules
+proxy.use(schema({
+  schemas: {
+    'user.name': z.string().min(3),
+    'user.email': z.string().email(),
+    'user.age': z.number().min(18),
+    'settings': z.object({
+      theme: z.enum(['light', 'dark']),
+      notifications: z.boolean()
+    })
+  }
+}))
+
+// Create the state with validation
+const store = proxy({
+  user: {
+    name: 'John',
+    email: 'john@example.com',
+    age: 25
+  },
+  settings: {
+    theme: 'dark',
+    notifications: true
+  }
+})
+
+// Valid changes will work
+store.user.name = 'Alice' // Works fine
+
+// Invalid changes will be prevented
+store.user.name = 'A' // Error: String must contain at least 3 character(s)
+store.user.email = 'not-an-email' // Error: Invalid email
+store.settings.theme = 'blue' // Error: Invalid enum value
+```
+
+#### Advanced Configuration
+
+```typescript
+import { proxyInstance, standardSchemaPlugin } from 'valtio-plugin'
+import { object, string, number, email, minLength, minValue } from 'valibot'
+
+const { schema, schemaSymbol } = standardSchemaPlugin()
+const proxy = proxyInstance()
+
+// Custom error handling
+proxy.use(schema({
+  schemas: {
+    'user.name': string([minLength(3)]),
+    'user.email': string([email()]),
+    'user.age': number([minValue(18)])
+  },
+  onError: (path, value, issues) => {
+    // Custom error handling instead of preventing the change
+    console.warn(`Validation error at path ${path.join('.')}:`, issues)
+    // You can throw, log, or send the errors to a monitoring service
+  },
+  // Allow async validation (use with caution)
+  allowAsync: false
+}))
+
+// Create your store
+const store = proxy({
+  user: {
+    name: 'John',
+    email: 'john@example.com',
+    age: 25
+  }
+})
+
+// Access plugin API
+// Validate a value manually against a schema
+try {
+  const result = await proxy[schemaSymbol].validate(
+    string([email()]), 
+    'test@example.com'
+  )
+  console.log('Valid:', result)
+} catch (error) {
+  console.error('Invalid:', error.issues)
+}
+
+// Add schemas dynamically
+proxy[schemaSymbol].addSchemas({
+  'user.country': string([minLength(2)])
+})
+
+// Remove schemas
+proxy[schemaSymbol].removeSchemas(['user.email'])
+```
 
 ## Example: React Integration
 
