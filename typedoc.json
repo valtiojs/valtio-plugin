@@ -1,0 +1,43 @@
+{
+  "entryPoints": [
+    "./src/index.ts"
+  ],
+  "out": "./docs",
+  "plugin": [
+    "typedoc-plugin-markdown",
+  ],
+  "excludePrivate": false,
+  "excludeProtected": false,
+  "excludeExternals": true,
+  "categorizeByGroup": true,
+  "highlightLanguages": [
+    "tsx",
+    "jsx",
+    "typescript",
+    "javascript",
+    "json",
+    "css",
+    "html",
+    "shellscript"
+  ],
+  "disableSources": false,
+  "hideGenerator": true,
+  "cleanOutputDir": true,
+  "jsDocCompatibility": true,
+  "githubPages": false,
+  "excludeInternal": false,
+  "excludeNotDocumented": false,
+  "disableGit": false,
+  "pretty": true,
+  "exclude": [
+    "visualizer",
+    "tests",
+    "public",
+    "coverage",
+    ".sandbox",
+    ".github",
+    "dist",
+    "docs",
+    "web"
+  ]
+}
