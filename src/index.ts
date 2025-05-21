@@ -458,4 +458,6 @@ export function proxyInstance() {
       instanceRegistry.delete(instanceId);
     }
   })
+
+  return proxyFn
 }
