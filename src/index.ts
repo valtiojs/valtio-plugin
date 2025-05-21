@@ -36,6 +36,20 @@ export type ValtioPlugin = {
   api?: Record<string, any>
 }
 
+// Define the type for the proxy factory function
+export interface ProxyFactory {
+  <T extends object>(initialState: T): T;
+  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => ProxyFactory;
+  subscribe: <T extends object>(
+    proxyObject: T,
+    callback: (ops: INTERNAL_Op[]) => void,
+    notifyInSync?: boolean
+  ) => (() => void);
+  snapshot: <T extends object>(proxyObject: T) => Snapshot<T>;
+  dispose: () => void;
+  [key: symbol]: any; // For plugin symbol access
+}
+
 interface EnhancedProxy {
   [ROOT_PROXY_SYMBOL]?: object,
   [PROXY_PATH_SYMBOL]?: (string | symbol)[],
@@ -122,6 +136,11 @@ const initializePluginSystem = () => {
        */
       const originalGet = handler.get
       handler.get = (target, prop, receiver) => {
+        // Skip metadata symbol access to prevent infinite recursion
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+          return Reflect.get(target, prop, receiver)
+        }
+        
         const result = originalGet
           ? originalGet(target, prop, receiver)
           : Reflect.get(target, prop, receiver)
@@ -129,23 +148,21 @@ const initializePluginSystem = () => {
         // If the result of the get is a proxy object (i.e. nested object)
         // make sure to propagate the "root" (aka instance) meta data
         if (isObject(result) && result !== receiver) {
-          if (hasRootProxy(receiver)) {
-            const rootProxy = receiver[ROOT_PROXY_SYMBOL]
-
+          // Use Reflect directly to avoid infinite recursion
+          const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
+          if (rootProxy) {
             // If result doesn't have root metadata yet, add it
             if (!hasRootProxy(result)) {
               const resultTarget = proxyStateMap.get(result)?.[0]
 
-              const instanceId = hasInstanceId(receiver) 
-                ? receiver[INSTANCE_ID_SYMBOL]
-                : undefined
-
-              const parentPath = hasProxyPath(receiver)
-                ? receiver[PROXY_PATH_SYMBOL] as (string | symbol)[]
-                : []
+              const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
+              
+              let parentPath: (string | symbol)[] = []
+              if (hasProxyPath(receiver)) {
+                parentPath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
+              }
 
               const path = [...parentPath, prop]
-
               const meta = { rootProxy, instanceId, path }
 
               if (result) addMetaData(result, meta)
@@ -161,9 +178,15 @@ const initializePluginSystem = () => {
        */
       const originalSet = handler.set
       handler.set = (target, prop, value, receiver) => {
-        const rootProxy = receiver[ROOT_PROXY_SYMBOL]
-        const instanceId = receiver[INSTANCE_ID_SYMBOL]
-        const registry = instanceRegistry.get(instanceId)
+        // Skip metadata symbol handling
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+          return Reflect.set(target, prop, value, receiver)
+        }
+        
+        // Get metadata directly using Reflect to avoid infinite recursion
+        const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
+        const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
+        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
 
         if (
           isInitializing() ||
@@ -179,9 +202,10 @@ const initializePluginSystem = () => {
 
         const prevValue = Reflect.get(target, prop)
         
-        const basePath = hasProxyPath(receiver)
-          ? receiver[PROXY_PATH_SYMBOL] as (string | symbol)[]
-          : []
+        let basePath: (string | symbol)[] = []
+        if (hasProxyPath(receiver)) {
+          basePath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
+        }
         const fullPath = [...basePath, prop]
 
         for (const plugin of registry.plugins) {
@@ -199,11 +223,10 @@ const initializePluginSystem = () => {
                 return true // Indicate success without actually setting
               }
             } catch (e) {
-              console.error(`Error in plugin {name: ${plugin.name}, id: ${plugin.id} in beforeChange within set trap: `, e)
+              console.error(`Error in plugin {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in beforeChange: `, e)
             }
           }
         }
-
 
         const result = originalSet
           ? originalSet(target, prop, value, receiver)
@@ -220,7 +243,7 @@ const initializePluginSystem = () => {
                   rootProxy
                 )
               } catch (e) {
-                console.error(`Error in plugin: {name: ${plugin.name}, id: ${plugin.id}} in afterChange within set trap: `, e)
+                console.error(`Error in plugin: {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in afterChange: `, e)
               }
             }
           }
@@ -233,37 +256,38 @@ const initializePluginSystem = () => {
        */
       const originalDeleteProperty = handler.deleteProperty
       handler.deleteProperty = (target, prop) => {
+        // Skip metadata symbol handling
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+          return Reflect.deleteProperty(target, prop)
+        }
+        
         if (isInitializing()) {
           return originalDeleteProperty 
             ? originalDeleteProperty(target, prop) 
             : Reflect.deleteProperty(target, prop)
         }
 
-        // Find which target objects have our metadata
-        const state = proxyStateMap.get(target)
-
         // Get the previous value
         const prevValue = Reflect.get(target, prop)
 
         // Check if target has our metadata
-        if (
-          !hasRootProxy(target)) {
+        if (!hasRootProxy(target)) {
           // Not one of our objects, use original handler
           return originalDeleteProperty 
             ? originalDeleteProperty(target, prop) 
             : Reflect.deleteProperty(target, prop)
         }
 
-        const rootProxy = hasRootProxy(target)
-          ? target[ROOT_PROXY_SYMBOL]
-          : undefined
-        const instanceId = hasInstanceId(target)
-          ? target[INSTANCE_ID_SYMBOL]
-          : undefined
-        const basePath = hasProxyPath(target) 
-          ? target[PROXY_PATH_SYMBOL as keyof typeof target] as (string | symbol)[]
-          : []
-        const registry = instanceRegistry.get(instanceId as string)
+        // Use Reflect directly to avoid infinite recursion
+        const rootProxy = Reflect.get(target, ROOT_PROXY_SYMBOL, target)
+        const instanceId = Reflect.get(target, INSTANCE_ID_SYMBOL, target)
+        
+        let basePath: (string | symbol)[] = []
+        if (hasProxyPath(target)) {
+          basePath = Reflect.get(target, PROXY_PATH_SYMBOL, target) as (string | symbol)[]
+        }
+        
+        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
         const fullPath = [...basePath, prop]
 
         if (
@@ -271,8 +295,7 @@ const initializePluginSystem = () => {
           !rootProxy || 
           !instanceId ||
           !registry ||
-          registry.isDisposed ||
-          !state
+          registry.isDisposed
         ) {
           return originalDeleteProperty
             ? originalDeleteProperty(target, prop)
@@ -287,14 +310,14 @@ const initializePluginSystem = () => {
                 fullPath.map(String), 
                 undefined, 
                 prevValue, 
-                rootProxy as object
+                rootProxy
               )
               if (shouldContinue === false) {
                 // Plugin prevented the deletion
                 return false
               }
             } catch (e) {
-              console.error(`Error in plugin: {name: ${plugin.name}, id: ${plugin.id}}: beforeChange: `, e)
+              console.error(`Error in plugin: {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}}: beforeChange: `, e)
             }
           }
         }
@@ -304,7 +327,6 @@ const initializePluginSystem = () => {
           ? originalDeleteProperty(target, prop) 
           : Reflect.deleteProperty(target, prop)
 
-
         // Run afterChange hooks
         if (result) {
           for (const plugin of registry.plugins) {
@@ -313,7 +335,7 @@ const initializePluginSystem = () => {
                 plugin.afterChange(
                   fullPath.map(String), 
                   undefined, 
-                  rootProxy as object
+                  rootProxy
                 )
               } catch (e) {
                 console.error(`Error in plugin ${plugin.id} afterChange:`, e)
@@ -329,7 +351,7 @@ const initializePluginSystem = () => {
   })
 }
 
-export function proxyInstance() {
+export function proxyInstance(): ProxyFactory {
   initializePluginSystem()
 
   const instanceId = createInstanceId()
@@ -343,121 +365,163 @@ export function proxyInstance() {
 
   instanceRegistry.set(instanceId, registry)
 
-  const createProxy = <T extends object>(initialState: T) => {
+  const createProxy = <T extends object>(initialState: T): T => {
     if (registry.isDisposed) {
       throw new Error('This instance has been disposed')
     }
 
+    // Create the proxy with valtio
     const valtioProxy = originalProxy(initialState)
+    
+    // Add our metadata
     const meta = { rootProxy: valtioProxy, instanceId, path: []}
-
     addMetaData(valtioProxy, meta)
 
+    // Call plugin initialization hooks
     for(const plugin of registry.plugins) {
-      if (plugin.onInit) plugin.onInit()
+      if (plugin.onInit) {
+        try {
+          plugin.onInit()
+        } catch (e) {
+          console.error(`Error in plugin ${plugin.id} onInit:`, e)
+        }
+      }
     }
 
-    return new Proxy(valtioProxy, {
-      get(target, prop, receiver) {
-        if (typeof prop === 'symbol' && registry.pluginApis.has(prop)) {
-          return registry.pluginApis.get(prop)
-        }
-
-        return Reflect.get(target, prop, receiver)
-      }
-    })
+    // We need to return valtioProxy directly without wrapping it
+    // because valtio's subscribe and snapshot rely on the original proxy
+    return valtioProxy
   }
 
-  const proxyFn = Object.assign(createProxy, {
-    use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => {
-      if (registry.isDisposed) {
-        throw new Error('This instance has been disposed')
+  // Create a proxy for the factory function to expose plugin APIs
+  const proxyFn = new Proxy(createProxy, {
+    get(target, prop) {
+      // First check if it's one of our methods
+      if (prop === 'use' || prop === 'subscribe' || prop === 'snapshot' || prop === 'dispose') {
+        return Reflect.get(target, prop)
       }
       
-      const pluginsToAdd = Array.isArray(pluginOrPlugins) 
-        ? pluginOrPlugins 
-        : [pluginOrPlugins]
-
-      for (const plugin of pluginsToAdd) {
-        const existingIndex = registry.plugins.findIndex(p => p.id === plugin.id)
-        if (existingIndex >= 0) {
-          registry.plugins[existingIndex] = plugin
-        } else {
-          registry.plugins.push(plugin)
+      // Then check if it's a plugin symbol
+      if (typeof prop === 'symbol' && registry.pluginApis.has(prop)) {
+        return registry.pluginApis.get(prop)
+      }
+      
+      // Otherwise return the property from the target
+      return Reflect.get(target, prop)
+    }
+  })
+  
+  // Add methods to the proxied function
+  Object.defineProperties(proxyFn, {
+    use: {
+      value: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => {
+        if (registry.isDisposed) {
+          throw new Error('This instance has been disposed')
         }
         
-        // Store the plugin API if provided
-        if (plugin.symbol && plugin.api) {
-          registry.pluginApis.set(plugin.symbol, plugin.api)
+        const pluginsToAdd = Array.isArray(pluginOrPlugins) 
+          ? pluginOrPlugins 
+          : [pluginOrPlugins]
+
+        for (const plugin of pluginsToAdd) {
+          const existingIndex = registry.plugins.findIndex(p => p.id === plugin.id)
+          if (existingIndex >= 0) {
+            registry.plugins[existingIndex] = plugin
+          } else {
+            registry.plugins.push(plugin)
+          }
+          
+          // Store the plugin API if provided
+          if (plugin.symbol && plugin.api) {
+            registry.pluginApis.set(plugin.symbol, plugin.api)
+          }
         }
-      }
-      
-      return proxyFn // For chaining
+        
+        return proxyFn as ProxyFactory // For chaining
+      },
+      enumerable: true,
+      configurable: true,
     },
 
-    subscribe: <T extends object>(
-      proxyObject: T,
-      callback: (ops: INTERNAL_Op[]) => void,
-      notifyInSync?: boolean
-    ): (() => void) => {
-      if (registry.isDisposed) {
-        throw new Error('This instance has been disposed')
-      }
-      
-      // Check if this proxy belongs to this instance
-      if (hasRootProxy(proxyObject)) {
-        const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
-        if (instanceId === registry.id) {
-          // Run onSubscribe hooks
-          registry.plugins.forEach(plugin => {
-            if (plugin.onSubscribe) {
-              try {
-                plugin.onSubscribe(proxyObject, callback)
-              } catch (e) {
-                console.error(`Error in plugin ${plugin.id} onSubscribe:`, e)
+    subscribe: {
+      value: <T extends object>(
+        proxyObject: T,
+        callback: (ops: INTERNAL_Op[]) => void,
+        notifyInSync?: boolean
+      ): (() => void) => {
+        if (registry.isDisposed) {
+          throw new Error('This instance has been disposed')
+        }
+        
+        // Check if this proxy belongs to this instance
+        if (isObject(proxyObject) && hasInstanceId(proxyObject)) {
+          const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
+          if (instanceId === registry.id) {
+            // Run onSubscribe hooks
+            registry.plugins.forEach(plugin => {
+              if (plugin.onSubscribe) {
+                try {
+                  plugin.onSubscribe(proxyObject, callback)
+                } catch (e) {
+                  console.error(`Error in plugin ${plugin.id} onSubscribe:`, e)
+                }
               }
-            }
-          })
+            })
+          }
         }
-      }
-      
-      // Use Valtio's subscribe
-      return originalSubscribe(proxyObject, callback, notifyInSync)
+        
+        // Use Valtio's subscribe
+        return originalSubscribe(proxyObject, callback, notifyInSync)
+      },
+      enumerable: true,
+      configurable: true,
     },
 
-    snapshot: <T extends object>(proxyObject: T) => {
-      if (registry.isDisposed) {
-        throw new Error('This instance has been disposed')
-      }
-      
-      // Get the original snapshot
-      let snap = originalSnapshot(proxyObject)
-      
-      // Check if this proxy belongs to this instance
-      if (hasRootProxy(proxyObject)) {
-        const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
-        if (instanceId === registry.id) {
-          // Apply alterSnapshot hooks
-          for(const plugin of registry.plugins) {
-            if (plugin.alterSnapshot) {
-              snap = plugin.alterSnapshot(snap)
+    snapshot: {
+      value: <T extends object>(proxyObject: T) => {
+        if (registry.isDisposed) {
+          throw new Error('This instance has been disposed')
+        }
+        
+        // Get the original snapshot
+        let snap = originalSnapshot(proxyObject)
+        
+        // Check if this proxy belongs to this instance
+        if (isObject(proxyObject) && hasInstanceId(proxyObject)) {
+          const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
+          if (instanceId === registry.id) {
+            // Apply alterSnapshot hooks
+            for(const plugin of registry.plugins) {
+              if (plugin.alterSnapshot) {
+                try {
+                  snap = plugin.alterSnapshot(snap)
+                } catch (e) {
+                  console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+                }
+              }
             }
           }
         }
-      }
-      
-      return snap
+        
+        return snap
+      },
+      enumerable: true,
+      configurable: true,
     },
 
-    dispose: () => {
-      if (registry.isDisposed) return;
-      
-      registry.isDisposed = true;
-      registry.pluginApis.clear();
-      registry.plugins.length = 0;
-      instanceRegistry.delete(instanceId);
+    dispose: {
+      value: () => {
+        if (registry.isDisposed) return;
+        
+        registry.isDisposed = true;
+        registry.pluginApis.clear();
+        registry.plugins.length = 0;
+        instanceRegistry.delete(instanceId);
+      },
+      enumerable: true,
+      configurable: true,
     }
   })
 
-  return proxyFn
+  return proxyFn as ProxyFactory
 }

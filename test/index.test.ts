@@ -115,13 +115,29 @@ describe('Valtio Plugin System', () => {
     
     it('should replace plugins with the same id', () => {
       const proxy = proxyInstance();
-      const testPlugin1 = createTestPlugin('test-plugin', {
-        testMethod: vi.fn().mockReturnValue('result1')
-      });
       
-      const testPlugin2 = createTestPlugin('test-plugin', {
+      // For this test, we need to manually create plugins with different API implementations
+      const api1 = {
+        testMethod: vi.fn().mockReturnValue('result1')
+      };
+      
+      const api2 = {
         testMethod: vi.fn().mockReturnValue('result2')
-      });
+      };
+      
+      const testPlugin1 = {
+        id: 'test-plugin',
+        name: 'Test Plugin',
+        symbol: TEST_PLUGIN_SYMBOL,
+        api: api1
+      };
+      
+      const testPlugin2 = {
+        id: 'test-plugin',
+        name: 'Test Plugin',
+        symbol: TEST_PLUGIN_SYMBOL,
+        api: api2
+      };
       
       proxy.use(testPlugin1);
       proxy.use(testPlugin2);
@@ -329,7 +345,7 @@ describe('Valtio Plugin System', () => {
   });
   
   describe('proxy.subscribe()', () => {
-    it('should work with plugin hooks', () => {
+    it('should work with plugin hooks', async () => {
       const proxy = proxyInstance();
       const testPlugin = createTestPlugin();
       proxy.use(testPlugin);
@@ -341,6 +357,9 @@ describe('Valtio Plugin System', () => {
       
       // Modify the store
       store.count = 1;
+      
+      // Need to wait for the next tick for subscribers to be notified
+      await new Promise(resolve => setTimeout(resolve, 0));
       
       // Plugin hooks should be called
       expect(testPlugin.beforeChange).toHaveBeenCalled();
@@ -478,7 +497,7 @@ describe('Valtio Plugin System', () => {
       expect(mockUseSnapshot).toHaveBeenCalledWith(store);
     });
     
-    it('should work with original subscribe from valtio', () => {
+    it('should work with original subscribe from valtio', async () => {
       const proxy = proxyInstance();
       const store = proxy({ count: 0 });
       
@@ -487,6 +506,9 @@ describe('Valtio Plugin System', () => {
       
       // Modify the store
       store.count = 1;
+      
+      // Need to wait for the next tick for subscribers to be notified
+      await new Promise(resolve => setTimeout(resolve, 0));
       
       // Callback should be called
       expect(callback).toHaveBeenCalled();
