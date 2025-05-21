@@ -1,3 +1,5 @@
+# THIS LIBRARY IS UNDER CONSTRUCTOIN AND IS NOT MEANT TO BE USED YET
+
 # Valtio Plugin System
 
 A plugin system for Valtio that allows extending the state management library with custom functionality without modifying its core.
