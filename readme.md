@@ -1,5 +1,3 @@
-# THIS LIBRARY IS UNDER CONSTRUCTOIN AND IS NOT MEANT TO BE USED YET
-
 # Valtio Plugin System
 
 A plugin system for Valtio that allows extending the state management library with custom functionality without modifying its core.
@@ -296,9 +294,7 @@ proxy.use(schema({
     // Custom error handling instead of preventing the change
     console.warn(`Validation error at path ${path.join('.')}:`, issues)
     // You can throw, log, or send the errors to a monitoring service
-  },
-  // Allow async validation (use with caution)
-  allowAsync: false
+  }
 }))
 
 // Create your store
