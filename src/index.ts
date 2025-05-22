@@ -25,6 +25,7 @@ export type ValtioPlugin = {
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
   onGet?: (path: string[], value: unknown, state: object) => void
+  onDispose?: () => void
   
   // Path-specific handlers
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
@@ -47,7 +48,7 @@ export interface ProxyFactory {
   ) => (() => void);
   snapshot: <T extends object>(proxyObject: T) => Snapshot<T>;
   dispose: () => void;
-  [key: symbol]: any; // For plugin symbol access
+  [key: string | symbol]: any; // For plugin symbol access
 }
 
 interface EnhancedProxy {
@@ -79,7 +80,6 @@ const isObject = (x: unknown): x is object =>
 interface InstanceRegistry {
   id: string
   plugins: ValtioPlugin[]
-  pluginApis: Map<symbol, unknown>
   isDisposed: boolean
 }
 
@@ -391,7 +391,6 @@ export function proxyInstance(): ProxyFactory {
   const registry: InstanceRegistry = {
     id: instanceId,
     plugins: [],
-    pluginApis: new Map(),
     isDisposed: false
   }
 
@@ -432,10 +431,13 @@ export function proxyInstance(): ProxyFactory {
       if (prop === 'use' || prop === 'subscribe' || prop === 'snapshot' || prop === 'dispose') {
         return Reflect.get(target, prop)
       }
-      
-      // Then check if it's a plugin symbol
-      if (typeof prop === 'symbol' && registry.pluginApis.has(prop)) {
-        return registry.pluginApis.get(prop)
+
+      // Check if it's a plugin
+      if (typeof prop === 'string') {
+        const plugin = registry.plugins.find(p => p.id === prop)
+        if (plugin) {
+          return plugin // Return the whole plugin object
+        }
       }
       
       // Otherwise return the property from the target
@@ -461,11 +463,6 @@ export function proxyInstance(): ProxyFactory {
             registry.plugins[existingIndex] = plugin
           } else {
             registry.plugins.push(plugin)
-          }
-          
-          // Store the plugin API if provided
-          if (plugin.symbol && plugin.api) {
-            registry.pluginApis.set(plugin.symbol, plugin.api)
           }
         }
         
@@ -545,13 +542,21 @@ export function proxyInstance(): ProxyFactory {
       value: () => {
         if (registry.isDisposed) return;
         
+        // Give plugins a chance to clean up
+        for (const plugin of registry.plugins) {
+          if (plugin.onDispose) {
+            try {
+              plugin.onDispose()
+            } catch (e) {
+              console.error(`Error disposing plugin ${plugin.id}:`, e)
+            }
+          }
+        }
+        
         registry.isDisposed = true;
-        registry.pluginApis.clear();
         registry.plugins.length = 0;
         instanceRegistry.delete(instanceId);
-      },
-      enumerable: true,
-      configurable: true,
+      }
     }
   })
 
