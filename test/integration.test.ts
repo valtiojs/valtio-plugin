@@ -22,9 +22,6 @@ vi.mock('valtio/react', () => ({
 describe('Integration Tests', () => {
   describe('Real-world plugin usage', () => {
     it('should work with a persistence plugin', () => {
-      // Create a simple persistence plugin
-      const persistSymbol = Symbol('persist');
-      
       // Mock localStorage
       const mockStorage = {
         setItem: vi.fn(),
@@ -32,38 +29,31 @@ describe('Integration Tests', () => {
         removeItem: vi.fn(),
       };
       
-      const persistPlugin = () => {
-        const api = {
-          pause: vi.fn(),
-          resume: vi.fn(),
-          clear: vi.fn(),
-        };
+      // Create a persistence plugin with methods directly on plugin object
+      const createPersistPlugin = (options = { name: 'default-store' }) => ({
+        id: 'persist',
+        name: 'Persistence Plugin',
         
-        return {
-          persist: (options = { name: 'default-store' }) => ({
-            id: 'persist-plugin',
-            name: 'Persistence Plugin',
-            symbol: persistSymbol,
-            api,
-            
-            onInit: () => {
-              // Would normally load from storage here
-              mockStorage.getItem(options.name);
-            },
-            
-            afterChange: (path, value, state) => {
-              // Save to storage
-              mockStorage.setItem(options.name, JSON.stringify(state));
-            },
-          }),
-          persistSymbol,
-        };
-      };
+        // Plugin API methods directly on plugin
+        pause: vi.fn(),
+        resume: vi.fn(),
+        clear: vi.fn(),
+        
+        onInit: () => {
+          // Would normally load from storage here
+          mockStorage.getItem(options.name);
+        },
+        
+        afterChange: (path, value, state) => {
+          // Save to storage
+          mockStorage.setItem(options.name, JSON.stringify(state));
+        },
+      });
       
       // Use the plugin
-      const { persist, persistSymbol: symb } = persistPlugin();
       const proxy = proxyInstance();
-      proxy.use(persist({ name: 'my-store' }));
+      const persistPlugin = createPersistPlugin({ name: 'my-store' });
+      proxy.use(persistPlugin);
       
       const store = proxy({ count: 0 });
       
@@ -75,102 +65,79 @@ describe('Integration Tests', () => {
       expect(mockStorage.setItem).toHaveBeenCalledWith('my-store', expect.any(String));
       
       // We should be able to access the plugin API
-      proxy[symb].pause();
-      expect(proxy[symb].pause).toHaveBeenCalled();
+      proxy.persist.pause();
+      expect(proxy.persist.pause).toHaveBeenCalled();
     });
     
     it('should work with a logging plugin', () => {
-      
-      
-      const loggingPlugin = () => {
-        // Mock logger
-        const mockLogger = {
-          debug: vi.fn(),
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        };
-        // Create a simple logging plugin
-      const loggerSymbol = Symbol('logger');
-        
-        const api = {
-          ...mockLogger,
-          setLevel: vi.fn(),
-        };
-        
-        return {
-          logger: (options = { level: 'info' }) => ({
-            id: 'logger-plugin',
-            name: 'Logger Plugin',
-            symbol: loggerSymbol,
-            api,
-            
-            beforeChange: (path, value, prevValue, state) => {
-              mockLogger.debug(`Will change ${path.join('.')} from ${prevValue} to ${value}`);
-              return true;
-            },
-            
-            afterChange: (path, value, state) => {
-              mockLogger.info(`Changed ${path.join('.')} to ${value}`);
-            },
-          }),
-          loggerSymbol,
-        };
+      // Mock logger
+      const mockLogger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
       };
       
+      // Create a logging plugin with methods directly on plugin object
+      const createLoggerPlugin = (options = { level: 'info' }) => ({
+        id: 'logger',
+        name: 'Logger Plugin',
+        
+        // Plugin API methods directly on plugin
+        ...mockLogger,
+        setLevel: vi.fn(),
+        
+        beforeChange: (path, value, prevValue, state) => {
+          mockLogger.debug(`Will change ${path.join('.')} from ${prevValue} to ${value}`);
+          return true;
+        },
+        
+        afterChange: (path, value, state) => {
+          mockLogger.info(`Changed ${path.join('.')} to ${value}`);
+        },
+      });
+      
       // Use the plugin
-      const { logger, loggerSymbol } = loggingPlugin();
       const proxy = proxyInstance();
-      proxy.use(logger({ level: 'debug' }));
+      const loggerPlugin = createLoggerPlugin({ level: 'debug' });
+      proxy.use(loggerPlugin);
       
       const store = proxy({ count: 0 });
       
       // Log methods should be accessible
-      proxy[loggerSymbol].debug('Custom debug message');
-      expect(proxy[loggerSymbol].debug).toHaveBeenCalledWith('Custom debug message');
+      proxy.logger.debug('Custom debug message');
+      expect(proxy.logger.debug).toHaveBeenCalledWith('Custom debug message');
       
       // Changing state should trigger log messages
       store.count = 1;
-      expect(proxy[loggerSymbol].debug).toHaveBeenCalledWith(expect.stringContaining('Will change count'));
-      expect(proxy[loggerSymbol].info).toHaveBeenCalledWith(expect.stringContaining('Changed count'));
+      expect(proxy.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Will change count'));
+      expect(proxy.logger.info).toHaveBeenCalledWith(expect.stringContaining('Changed count'));
     });
     
     it('should work with a validation plugin', () => {
-      // Create a simple validation plugin
-      
-      
-      const validationPlugin = () => {
-
-        const validateSymbol = Symbol('validate');
-        const api = {
-          validate: vi.fn(),
-          addSchema: vi.fn(),
-        };
+      // Create a validation plugin with methods directly on plugin object
+      const createValidationPlugin = () => ({
+        id: 'validation',
+        name: 'Validation Plugin',
         
-        return {
-          validate: (options = {}) => ({
-            id: 'validate-plugin',
-            name: 'Validation Plugin',
-            symbol: validateSymbol,
-            api,
-            
-            beforeChange: (path, value, prevValue, state) => {
-              // Simple validation - count must be >= 0
-              if (path[0] === 'count' && typeof value === 'number' && value < 0) {
-                console.error('Validation failed: count must be >= 0');
-                return false;
-              }
-              return true;
-            },
-          }),
-          validateSymbol,
-        };
-      };
+        // Plugin API methods directly on plugin
+        validate: vi.fn(),
+        addSchema: vi.fn(),
+        
+        beforeChange: (path, value, prevValue, state) => {
+          // Simple validation - count must be >= 0
+          if (path[0] === 'count' && typeof value === 'number' && value < 0) {
+            console.error('Validation failed: count must be >= 0');
+            return false;
+          }
+          return true;
+        },
+      });
       
       // Use the plugin
-      const { validate, validateSymbol } = validationPlugin();
       const proxy = proxyInstance();
-      proxy.use(validate());
+      const validationPlugin = createValidationPlugin();
+      proxy.use(validationPlugin);
       
       const store = proxy({ count: 0 });
       

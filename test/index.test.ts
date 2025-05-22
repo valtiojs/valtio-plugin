@@ -2,10 +2,6 @@ import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest';
 import { proxy, subscribe, snapshot } from 'valtio';
 import { proxyInstance, ValtioPlugin } from '../src';
 
-// Mock symbols for testing
-const TEST_PLUGIN_SYMBOL = Symbol('test-plugin');
-const ANOTHER_PLUGIN_SYMBOL = Symbol('another-plugin');
-
 // Define the shape of hook spies for TypeScript
 interface HookSpies {
   onInit?: ReturnType<typeof vi.fn>;
@@ -13,10 +9,11 @@ interface HookSpies {
   afterChange?: ReturnType<typeof vi.fn>;
   onSubscribe?: ReturnType<typeof vi.fn>;
   alterSnapshot?: ReturnType<typeof vi.fn>;
+  onDispose?: ReturnType<typeof vi.fn>;
   [key: string]: ReturnType<typeof vi.fn> | undefined;
 }
 
-// Helper to create a test plugin
+// Helper to create a test plugin - UPDATED FOR NEW API
 function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
   // Create spies for all hooks if not provided
   const spies: Required<HookSpies> = {
@@ -25,28 +22,28 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
     afterChange: hookSpies.afterChange || vi.fn(),
     onSubscribe: hookSpies.onSubscribe || vi.fn(),
     alterSnapshot: hookSpies.alterSnapshot || vi.fn(snapshot => snapshot),
-  };
-  
-  const api = {
-    getSpy: (name: string) => spies[name],
-    testMethod: vi.fn().mockReturnValue('test-result'),
-    resetSpies: () => {
-      Object.values(spies).forEach(spy => spy?.mockClear());
-      api.testMethod.mockClear();
-    }
+    onDispose: hookSpies.onDispose || vi.fn(),
   };
   
   const plugin: ValtioPlugin = {
     id,
     name: `Test Plugin (${id})`,
-    symbol: id === 'test-plugin' ? TEST_PLUGIN_SYMBOL : ANOTHER_PLUGIN_SYMBOL,
-    api,
     
+    // Lifecycle hooks
     onInit: spies.onInit,
     beforeChange: spies.beforeChange,
     afterChange: spies.afterChange,
     onSubscribe: spies.onSubscribe,
     alterSnapshot: spies.alterSnapshot,
+    onDispose: spies.onDispose,
+    
+    // Plugin API methods directly on plugin object
+    getSpy: (name: string) => spies[name],
+    testMethod: vi.fn().mockReturnValue('test-result'),
+    resetSpies: () => {
+      Object.values(spies).forEach(spy => spy?.mockClear());
+      plugin.testMethod.mockClear();
+    }
   };
   
   return plugin;
@@ -75,8 +72,6 @@ describe('Valtio Plugin System', () => {
       const proxy4 = proxyInstance()
       expect(proxy1).not.toBe(proxy2);
 
-
-      
       // Register a plugin with proxy1 but not proxy2
       const testPlugin = createTestPlugin();
       proxy1.use(testPlugin);
@@ -90,14 +85,12 @@ describe('Valtio Plugin System', () => {
       store1.count++
       
       // Plugin should be initialized for store1 but not store2
-      if (testPlugin.api) {
-        expect(testPlugin.api.getSpy('onInit')).toHaveBeenCalledTimes(1);
-        expect(testPlugin.api.getSpy('beforeChange')).toHaveBeenCalledTimes(2)
-      }
+      expect(testPlugin.getSpy('onInit')).toHaveBeenCalledTimes(1);
+      expect(testPlugin.getSpy('beforeChange')).toHaveBeenCalledTimes(2)
       
       // Plugin should be accessible from proxy1 but not proxy2
-      expect(proxy1[TEST_PLUGIN_SYMBOL]).toBeDefined();
-      expect(proxy2[TEST_PLUGIN_SYMBOL]).toBeUndefined();
+      expect(proxy1['test-plugin']).toBeDefined();
+      expect(proxy2['test-plugin']).toBeUndefined();
     });
   });
 
@@ -107,8 +100,8 @@ describe('Valtio Plugin System', () => {
       const testPlugin = createTestPlugin();
       
       proxy.use(testPlugin);
-      expect(proxy[TEST_PLUGIN_SYMBOL]).toBeDefined();
-      expect(proxy[TEST_PLUGIN_SYMBOL].testMethod()).toBe('test-result');
+      expect(proxy['test-plugin']).toBeDefined();
+      expect(proxy['test-plugin'].testMethod()).toBe('test-result');
     });
     
     it('should register multiple plugins', () => {
@@ -118,40 +111,30 @@ describe('Valtio Plugin System', () => {
       
       proxy.use([testPlugin1, testPlugin2]);
       
-      expect(proxy[TEST_PLUGIN_SYMBOL]).toBeDefined();
-      expect(proxy[ANOTHER_PLUGIN_SYMBOL]).toBeDefined();
+      expect(proxy['test-plugin']).toBeDefined();
+      expect(proxy['another-plugin']).toBeDefined();
     });
     
     it('should replace plugins with the same id', () => {
       const proxy = proxyInstance();
       
-      // For this test, we need to manually create plugins with different API implementations
-      const api1 = {
+      // For this test, we need to manually create plugins with different implementations
+      const testPlugin1: ValtioPlugin = {
+        id: 'test-plugin',
+        name: 'Test Plugin',
         testMethod: vi.fn().mockReturnValue('result1')
       };
       
-      const api2 = {
+      const testPlugin2: ValtioPlugin = {
+        id: 'test-plugin',
+        name: 'Test Plugin',
         testMethod: vi.fn().mockReturnValue('result2')
-      };
-      
-      const testPlugin1 = {
-        id: 'test-plugin',
-        name: 'Test Plugin',
-        symbol: TEST_PLUGIN_SYMBOL,
-        api: api1
-      };
-      
-      const testPlugin2 = {
-        id: 'test-plugin',
-        name: 'Test Plugin',
-        symbol: TEST_PLUGIN_SYMBOL,
-        api: api2
       };
       
       proxy.use(testPlugin1);
       proxy.use(testPlugin2);
       
-      expect(proxy[TEST_PLUGIN_SYMBOL].testMethod()).toBe('result2');
+      expect(proxy['test-plugin'].testMethod()).toBe('result2');
     });
     
     it('should support method chaining', () => {
@@ -279,7 +262,7 @@ describe('Valtio Plugin System', () => {
       });
       
       // Reset spies after creating the store
-      testPlugin.api.resetSpies();
+      testPlugin.resetSpies();
     });
     
     it('should handle changes to deeply nested properties', () => {
@@ -471,12 +454,12 @@ describe('Valtio Plugin System', () => {
       const store = proxy({ count: 0 });
       
       // Before disposal
-      expect(proxy[TEST_PLUGIN_SYMBOL]).toBeDefined();
+      expect(proxy['test-plugin']).toBeDefined();
       
       proxy.dispose();
       
       // After disposal
-      expect(proxy[TEST_PLUGIN_SYMBOL]).toBeUndefined();
+      expect(proxy['test-plugin']).toBeUndefined();
       
       // Methods should throw
       expect(() => proxy.use(testPlugin)).toThrow('This instance has been disposed');
