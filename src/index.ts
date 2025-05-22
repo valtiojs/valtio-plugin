@@ -24,6 +24,7 @@ export type ValtioPlugin = {
   beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
+  onGet?: (path: string[], value: unknown, state: object) => void
   
   // Path-specific handlers
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
@@ -31,9 +32,8 @@ export type ValtioPlugin = {
   // Snapshot modification
   alterSnapshot?: <T, AlteredSnapshot = Snapshot<T>>(snapshot: Snapshot<T>) => AlteredSnapshot
 
-  // Plugin API access
-  symbol?: symbol
-  api?: Record<string, any>
+  // Plugin authors should be able to add whatevery they want here
+  [key: string]: any
 }
 
 // Define the type for the proxy factory function
@@ -146,18 +146,19 @@ const initializePluginSystem = () => {
           ? originalGet(target, prop, receiver)
           : Reflect.get(target, prop, receiver)
 
+        // Get metadata for plugin hooks
+        const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
+        const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
+        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
+
         // If the result of the get is a proxy object (i.e. nested object)
         // make sure to propagate the "root" (aka instance) meta data
         if (isObject(result) && result !== receiver) {
-          // Use Reflect directly to avoid infinite recursion
-          const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
           if (rootProxy) {
             // If result doesn't have root metadata yet, add it
             if (!hasRootProxy(result)) {
               const resultTarget = proxyStateMap.get(result)?.[0]
 
-              const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
-              
               let parentPath: (string | symbol)[] = []
               if (hasProxyPath(receiver)) {
                 parentPath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
@@ -171,6 +172,36 @@ const initializePluginSystem = () => {
             }
           }
         }
+
+        // Call onGet hooks for ALL property access (not just nested objects)
+        if (
+          !isInitializing() &&
+          rootProxy && 
+          instanceId &&
+          registry &&
+          !registry.isDisposed
+        ) {
+          let basePath: (string | symbol)[] = []
+          if (hasProxyPath(receiver)) {
+            basePath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
+          }
+          const fullPath = [...basePath, prop]
+
+          for (const plugin of registry.plugins) {
+            if (plugin.onGet) {
+              try {
+                plugin.onGet(
+                  fullPath.map(String),
+                  result,
+                  rootProxy
+                )
+              } catch (e) {
+                console.error(`Error in plugin {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in onGet: `, e)
+              }
+            }
+          }
+        }
+
         return result
       }
 
