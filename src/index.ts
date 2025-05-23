@@ -32,7 +32,9 @@ export type ValtioPlugin = {
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
   
   // Snapshot modification
-  alterSnapshot?: <Input, Output = Record<string, unknown>>(snapshot: Snapshot<Input>) => Output
+  alterSnapshot?: <Input, Output = Snapshot<Input> | Record<string, unknown>>(
+    snapshot: Snapshot<Input>
+  ) => Output
 
   // Plugin authors should be able to add whatevery they want here
   [key: string]: any
