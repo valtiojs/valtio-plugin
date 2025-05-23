@@ -163,12 +163,69 @@ export const createValidationPlugin = (options = {}) => {
 ## Plugin Lifecycle Hooks
 
 - **onInit**: Called when the plugin is first added to a factory
+- **onAttach**: Called when the plugin is attached to a proxy factory, receives the factory instance
 - **onGet**: Called when a property is accessed (useful for tracking, analytics, reactive systems)
 - **beforeChange**: Called before a value changes, can prevent changes by returning `false`
 - **afterChange**: Called after a value changes
 - **onSubscribe**: Called when a subscription is created on a proxy
 - **alterSnapshot**: Called when a snapshot is created, can modify the snapshot
 - **onDispose**: Called when the factory is disposed, for cleanup
+
+### Using onAttach Hook
+
+The `onAttach` hook is particularly useful when your plugin needs to create additional proxy instances with the same plugin configuration. Here's a simple example:
+
+```typescript
+const createCachePlugin = () => {
+  let proxyFactory = null
+  const caches = new Map()
+  
+  return {
+    id: 'cache',
+    name: 'Cache Plugin',
+    
+    // Store the factory reference when attached
+    onAttach: (factory) => {
+      proxyFactory = factory
+    },
+    
+    // Plugin API methods can now use the factory
+    createCache: (name, initialData = {}) => {
+      if (!proxyFactory) {
+        throw new Error('Plugin not attached to a factory')
+      }
+      
+      // Create a new cache instance with the same plugins
+      const cache = proxyFactory(initialData)
+      caches.set(name, cache)
+      
+      return cache
+    },
+    
+    getCache: (name) => caches.get(name),
+    
+    clearCache: (name) => {
+      const cache = caches.get(name)
+      if (cache) {
+        Object.keys(cache).forEach(key => delete cache[key])
+      }
+    },
+    
+    listCaches: () => Array.from(caches.keys())
+  }
+}
+
+// Usage
+const factory = proxyInstance().use(createCachePlugin())
+
+// Create different cache instances
+const userCache = factory.cache.createCache('users', { john: { age: 30 } })
+const productCache = factory.cache.createCache('products')
+
+// All cache instances have the same plugin behavior
+userCache.jane = { age: 25 }
+productCache.laptop = { price: 999 }
+```
 
 ## API
 
@@ -305,17 +362,23 @@ const createPersistPlugin = (key) => ({
 })
 ```
 
-### Reactive Plugin
+### Reactive Plugin with onAttach
 
 ```typescript
 const createReactivePlugin = () => {
   const watchers = new Map()
   let isBatching = false
   const batchCallbacks = new Set()
+  let proxyFactory = null
   
   return {
     id: 'reactive',
     name: 'Reactive Plugin',
+    
+    // Store reference to the factory when attached
+    onAttach: (factory) => {
+      proxyFactory = factory
+    },
     
     onGet: (path, value, state) => {
       // Track dependencies for active watchers
@@ -359,6 +422,23 @@ const createReactivePlugin = () => {
       return () => watchers.delete(id) // unwatch
     },
     
+    // Create a derived store that automatically updates
+    createDerived: (deriveFn) => {
+      if (!proxyFactory) {
+        throw new Error('Plugin not attached to a factory')
+      }
+      
+      // Create a new proxy instance with the same plugins
+      const derived = proxyFactory({ value: null })
+      
+      // Watch and automatically update the derived state
+      this.watch(() => {
+        derived.value = deriveFn()
+      })
+      
+      return derived
+    },
+    
     batch: (fn) => {
       if (isBatching) return fn()
       
@@ -378,6 +458,23 @@ const createReactivePlugin = () => {
     getWatcherCount: () => watchers.size
   }
 }
+
+// Usage example showing onAttach in action
+const factory = proxyInstance().use(createReactivePlugin())
+
+const mainStore = factory({ 
+  count: 0, 
+  name: 'John' 
+})
+
+// Plugin can now create derived stores using the same factory
+const doubledCount = factory.reactive.createDerived(() => mainStore.count * 2)
+const displayName = factory.reactive.createDerived(() => `Hello, ${mainStore.name}!`)
+
+// All stores share the same plugin configuration
+mainStore.count = 5
+console.log(doubledCount.value) // 10
+console.log(displayName.value) // "Hello, John!"
 ```
 
 ### DevTools Plugin
