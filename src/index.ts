@@ -31,7 +31,7 @@ export type ValtioPlugin = {
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
   
   // Snapshot modification
-  alterSnapshot?: <T, AlteredSnapshot = Snapshot<T>>(snapshot: Snapshot<T>) => AlteredSnapshot
+  alterSnapshot?: <Input, Output = Record<string, unknown>>(snapshot: Snapshot<Input>) => Output
 
   // Plugin authors should be able to add whatevery they want here
   [key: string]: any
@@ -39,16 +39,16 @@ export type ValtioPlugin = {
 
 // Define the type for the proxy factory function
 export interface ProxyFactory {
-  <T extends object>(initialState: T): T;
-  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => ProxyFactory;
+  <T extends object>(initialState: T): T
+  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => ProxyFactory
   subscribe: <T extends object>(
     proxyObject: T,
     callback: (ops: INTERNAL_Op[]) => void,
     notifyInSync?: boolean
-  ) => (() => void);
-  snapshot: <T extends object>(proxyObject: T) => Snapshot<T>;
-  dispose: () => void;
-  [key: string | symbol]: any; // For plugin symbol access
+  ) => (() => void)
+  snapshot: <T extends object>(proxyObject: T) => Snapshot<T>
+  dispose: () => void
+  [key: string | symbol]: any // For plugin symbol access
 }
 
 interface EnhancedProxy {
@@ -540,7 +540,7 @@ export function proxyInstance(): ProxyFactory {
 
     dispose: {
       value: () => {
-        if (registry.isDisposed) return;
+        if (registry.isDisposed) return
         
         // Give plugins a chance to clean up
         for (const plugin of registry.plugins) {
@@ -553,9 +553,9 @@ export function proxyInstance(): ProxyFactory {
           }
         }
         
-        registry.isDisposed = true;
-        registry.plugins.length = 0;
-        instanceRegistry.delete(instanceId);
+        registry.isDisposed = true
+        registry.plugins.length = 0
+        instanceRegistry.delete(instanceId)
       }
     }
   })
