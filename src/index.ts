@@ -32,9 +32,7 @@ export type ValtioPlugin = {
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
   
   // Snapshot modification
-  alterSnapshot?: <Input, Output = Snapshot<Input> | Record<string, unknown>>(
-    snapshot: Snapshot<Input>
-  ) => Output
+  alterSnapshot?: (snapshot: Record<string, unknown>) => Record<string, unknown>
 
   // Plugin authors should be able to add whatevery they want here
   [key: string]: any
@@ -49,7 +47,7 @@ export interface ProxyFactory {
     callback: (ops: INTERNAL_Op[]) => void,
     notifyInSync?: boolean
   ) => (() => void)
-  snapshot: <T extends object>(proxyObject: T) => Snapshot<T>
+  snapshot: <T extends object>(proxyObject: T) => Snapshot<T> | Record<string, unknown>
   dispose: () => void
   [key: string | symbol]: any // For plugin symbol access
 }
@@ -519,19 +517,16 @@ export function proxyInstance(): ProxyFactory {
     },
 
     snapshot: {
-      value: <T extends object>(proxyObject: T) => {
+      value: <T extends object>(proxyObject: T): Snapshot<T> | Record<string, unknown> => {
         if (registry.isDisposed) {
           throw new Error('This instance has been disposed')
         }
         
-        // Get the original snapshot
-        let snap = originalSnapshot(proxyObject)
+        let snap: Record<string, unknown> = originalSnapshot(proxyObject) as Record<string, unknown>
         
-        // Check if this proxy belongs to this instance
         if (isObject(proxyObject) && hasInstanceId(proxyObject)) {
           const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
           if (instanceId === registry.id) {
-            // Apply alterSnapshot hooks
             for(const plugin of registry.plugins) {
               if (plugin.alterSnapshot) {
                 try {
@@ -544,7 +539,8 @@ export function proxyInstance(): ProxyFactory {
           }
         }
         
-        return snap
+        // Cast back to the union type for the return
+        return snap as Snapshot<T> | Record<string, unknown>
       },
       enumerable: true,
       configurable: true,
