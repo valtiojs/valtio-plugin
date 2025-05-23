@@ -5,6 +5,7 @@ import { proxyInstance, ValtioPlugin } from '../src';
 // Define the shape of hook spies for TypeScript
 interface HookSpies {
   onInit?: ReturnType<typeof vi.fn>;
+  onAttach?: ReturnType<typeof vi.fn>;
   beforeChange?: ReturnType<typeof vi.fn>;
   afterChange?: ReturnType<typeof vi.fn>;
   onSubscribe?: ReturnType<typeof vi.fn>;
@@ -18,6 +19,7 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
   // Create spies for all hooks if not provided
   const spies: Required<HookSpies> = {
     onInit: hookSpies.onInit || vi.fn(),
+    onAttach: hookSpies.onAttach || vi.fn(),
     beforeChange: hookSpies.beforeChange || vi.fn().mockReturnValue(true),
     afterChange: hookSpies.afterChange || vi.fn(),
     onSubscribe: hookSpies.onSubscribe || vi.fn(),
@@ -31,6 +33,7 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
     
     // Lifecycle hooks
     onInit: spies.onInit,
+    onAttach: spies.onAttach,
     beforeChange: spies.beforeChange,
     afterChange: spies.afterChange,
     onSubscribe: spies.onSubscribe,
@@ -155,6 +158,75 @@ describe('Valtio Plugin System', () => {
       expect(() => {
         proxy.use(testPlugin);
       }).toThrow('This instance has been disposed');
+    });
+    
+    it('should call onAttach when plugin is attached', () => {
+      const proxy = proxyInstance();
+      const testPlugin = createTestPlugin();
+      
+      proxy.use(testPlugin);
+      
+      expect(testPlugin.onAttach).toHaveBeenCalledTimes(1);
+      expect(testPlugin.onAttach).toHaveBeenCalledWith(proxy);
+    });
+    
+    it('should call onAttach for multiple plugins', () => {
+      const proxy = proxyInstance();
+      const testPlugin1 = createTestPlugin('plugin1');
+      const testPlugin2 = createTestPlugin('plugin2');
+      
+      proxy.use([testPlugin1, testPlugin2]);
+      
+      expect(testPlugin1.onAttach).toHaveBeenCalledTimes(1);
+      expect(testPlugin1.onAttach).toHaveBeenCalledWith(proxy);
+      expect(testPlugin2.onAttach).toHaveBeenCalledTimes(1);
+      expect(testPlugin2.onAttach).toHaveBeenCalledWith(proxy);
+    });
+    
+    it('should handle errors in onAttach', () => {
+      const proxy = proxyInstance();
+      const errorPlugin: ValtioPlugin = {
+        id: 'error-plugin',
+        onAttach: vi.fn().mockImplementation(() => {
+          throw new Error('onAttach error');
+        })
+      };
+      
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      
+      // Should not throw
+      expect(() => proxy.use(errorPlugin)).not.toThrow();
+      
+      // Error should be logged
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Error in plugin error-plugin onAttach:',
+        expect.any(Error)
+      );
+      
+      // Plugin should still be registered
+      expect(proxy['error-plugin']).toBeDefined();
+      
+      consoleSpy.mockRestore();
+    });
+    
+    it('should allow plugin to use factory from onAttach', () => {
+      const proxy = proxyInstance();
+      let capturedFactory: any = null;
+      
+      const plugin: ValtioPlugin = {
+        id: 'test-plugin',
+        onAttach: (factory) => {
+          capturedFactory = factory;
+          // Test that the factory can create proxy instances
+          const testState = factory({ value: 42 });
+          expect(testState.value).toBe(42);
+        }
+      };
+      
+      proxy.use(plugin);
+      
+      // Verify the factory was captured
+      expect(capturedFactory).toBe(proxy);
     });
   });
   

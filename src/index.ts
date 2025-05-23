@@ -21,6 +21,7 @@ export type ValtioPlugin = {
   
   // Lifecycle hooks
   onInit?: () => void
+  onAttach?: (proxyFactory: ProxyFactory) => void
   beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
@@ -463,6 +464,15 @@ export function proxyInstance(): ProxyFactory {
             registry.plugins[existingIndex] = plugin
           } else {
             registry.plugins.push(plugin)
+          }
+          
+          // Call onAttach if it exists
+          if (plugin.onAttach) {
+            try {
+              plugin.onAttach(proxyFn as ProxyFactory)
+            } catch (e) {
+              console.error(`Error in plugin ${plugin.id} onAttach:`, e)
+            }
           }
         }
         
