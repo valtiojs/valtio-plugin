@@ -8,50 +8,31 @@
     "type": "git",
     "url": "git+https://github.com/valtiojs/valtio-plugin.git"
   },
-  "source": "/src/index.ts",
-  "main": "./dist/index.js",
+  "source": "./src/index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
     ".": {
       "import": {
         "types": "./dist/index.d.ts",
-        "default": "./dist/index.mjs"
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.cjs"
       },
       "default": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       }
-    },
-    "./*": {
-      "import": {
-        "types": "./dist/esm/*.d.mts",
-        "default": "./dist/esm/*.mjs"
-      },
-      "default": {
-        "types": "./*.d.ts",
-        "default": "./*.js"
-      }
     }
   },
-  "typesVersions": {
-    ">=4.5": {
-      "esm/*": [
-        "esm/*"
-      ],
-      "*": [
-        "*"
-      ]
-    },
-    "*": {
-      "esm/*": [
-        "ts_version_4.5_and_above_is_required.d.ts"
-      ],
-      "*": [
-        "ts_version_4.5_and_above_is_required.d.ts"
-      ]
-    }
-  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "tsup": {
     "entry": [
       "src/index.ts"
@@ -68,6 +49,7 @@
   "scripts": {
     "test": "vitest run",
     "build": "tsup",
+    "dev": "tsup --watch",
     "prepublishOnly": "npm run build",
     "bench": "vitest bench",
     "coverage": "vitest run --coverage",
