@@ -1,0 +1,14 @@
+{
+  "name": "valtio-plugin-examples",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Examples for the Valtio Plugin System",
+  "scripts": {
+    "logging": "node logging-example.js",
+    "logging-ts": "tsx logging-plugin.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
