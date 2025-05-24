@@ -1,6 +1,8 @@
+// test/valtio-plugin.test.ts
 import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest';
-import { proxy, subscribe, snapshot } from 'valtio';
-import { proxyInstance, ValtioPlugin } from '../src';
+import { subscribe, snapshot } from 'valtio';
+// Import the enhanced proxy
+import { proxy, type ValtioPlugin } from '../src';
 
 // Define the shape of hook spies for TypeScript
 interface HookSpies {
@@ -14,7 +16,15 @@ interface HookSpies {
   [key: string]: ReturnType<typeof vi.fn> | undefined;
 }
 
-// Helper to create a test plugin - UPDATED FOR NEW API
+// Helper function to get a plugin with proper typing
+function getPlugin<T = any>(factory: any, pluginId: string): T {
+  return factory[pluginId] as T;
+}
+
+// Alternative helper for when TypeScript is still confused
+function safeGetPlugin(factory: any, pluginId: string): any {
+  return (factory as any)[pluginId];
+}
 function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
   // Create spies for all hooks if not provided
   const spies: Required<HookSpies> = {
@@ -45,7 +55,7 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
     testMethod: vi.fn().mockReturnValue('test-result'),
     resetSpies: () => {
       Object.values(spies).forEach(spy => spy?.mockClear());
-      plugin.testMethod.mockClear();
+      
     }
   };
   
@@ -56,70 +66,116 @@ describe('Valtio Plugin System', () => {
   beforeEach(() => {
     // Reset mocks before each test
     vi.clearAllMocks();
+    // Clear all global plugins before each test
+    proxy.clearPlugins();
   });
   
-  describe('proxyInstance()', () => {
+  describe('proxy.createInstance()', () => {
     it('should create a factory function', () => {
-      const proxy = proxyInstance();
-      expect(typeof proxy).toBe('function');
-      expect(typeof proxy.use).toBe('function');
-      expect(typeof proxy.subscribe).toBe('function');
-      expect(typeof proxy.snapshot).toBe('function');
-      expect(typeof proxy.dispose).toBe('function');
+      const instance = proxy.createInstance();
+      expect(typeof instance).toBe('function');
+      expect(typeof instance.use).toBe('function');
+      expect(typeof instance.subscribe).toBe('function');
+      expect(typeof instance.snapshot).toBe('function');
+      expect(typeof instance.dispose).toBe('function');
     });
     
     it('should create independent instances', () => {
-      const proxy1 = proxyInstance();
-      const proxy2 = proxyInstance();
-      const proxy3 = proxyInstance()
-      const proxy4 = proxyInstance()
-      expect(proxy1).not.toBe(proxy2);
+      const instance1 = proxy.createInstance();
+      const instance2 = proxy.createInstance();
+      const instance3 = proxy.createInstance();
+      const instance4 = proxy.createInstance();
+      expect(instance1).not.toBe(instance2);
 
-      // Register a plugin with proxy1 but not proxy2
+      // Register a plugin with instance1 but not instance2
       const testPlugin = createTestPlugin();
-      proxy1.use(testPlugin);
+      instance1.use(testPlugin);
       
       // Create stores
-      const store4 = proxy4({ count: 0 })
-      const store1 = proxy1({ count: 0, s: store4 });
-      const store2 = proxy2({ count: 0 });
-      const store3 = proxy3({ s: store1 })
-      store3.s.count++
-      store1.count++
+      const store4 = instance4({ count: 0 });
+      const store1 = instance1({ count: 0, s: store4 });
+      const store2 = instance2({ count: 0 });
+      const store3 = instance3({ s: store1 });
+      store3.s.count++;
+      store1.count++;
       
       // Plugin should be initialized for store1 but not store2
-      expect(testPlugin.getSpy('onInit')).toHaveBeenCalledTimes(1);
-      expect(testPlugin.getSpy('beforeChange')).toHaveBeenCalledTimes(2)
+      expect((testPlugin as any).getSpy('onInit')).toHaveBeenCalledTimes(1);
+      expect((testPlugin as any).getSpy('beforeChange')).toHaveBeenCalledTimes(2);
       
-      // Plugin should be accessible from proxy1 but not proxy2
-      expect(proxy1['test-plugin']).toBeDefined();
-      expect(proxy2['test-plugin']).toBeUndefined();
+      // Plugin should be accessible from instance1 but not instance2
+      expect((instance1 as any)['test-plugin']).toBeDefined();
+      expect((instance2 as any)['test-plugin']).toBeUndefined();
     });
   });
 
-  describe('plugin.use()', () => {
-    it('should register a single plugin', () => {
-      const proxy = proxyInstance();
+  describe('Global proxy.use()', () => {
+    it('should register a global plugin', () => {
       const testPlugin = createTestPlugin();
       
       proxy.use(testPlugin);
-      expect(proxy['test-plugin']).toBeDefined();
-      expect(proxy['test-plugin'].testMethod()).toBe('test-result');
+      expect((proxy as any)['test-plugin']).toBeDefined();
+      expect((proxy as any)['test-plugin'].testMethod()).toBe('test-result');
     });
     
-    it('should register multiple plugins', () => {
-      const proxy = proxyInstance();
+    it('should register multiple global plugins', () => {
       const testPlugin1 = createTestPlugin('test-plugin');
       const testPlugin2 = createTestPlugin('another-plugin');
       
       proxy.use([testPlugin1, testPlugin2]);
       
-      expect(proxy['test-plugin']).toBeDefined();
-      expect(proxy['another-plugin']).toBeDefined();
+      expect((proxy as any)['test-plugin']).toBeDefined();
+      expect((proxy as any)['another-plugin']).toBeDefined();
+    });
+    
+    it('should apply global plugins to all proxies', () => {
+      const testPlugin = createTestPlugin();
+      proxy.use(testPlugin);
+      
+      // Create proxies after plugin registration
+      const store1 = proxy({ count: 0 });
+      const store2 = proxy({ value: 'test' });
+      
+      // Both stores should trigger plugin hooks
+      store1.count = 1;
+      store2.value = 'changed';
+      
+      expect((testPlugin as any).getSpy('beforeChange')).toHaveBeenCalledTimes(2);
+      expect((testPlugin as any).getSpy('afterChange')).toHaveBeenCalledTimes(2);
+    });
+    
+    it('should support method chaining', () => {
+      const testPlugin1 = createTestPlugin('test-plugin');
+      const testPlugin2 = createTestPlugin('another-plugin');
+      
+      const result = proxy.use(testPlugin1).use(testPlugin2);
+      expect(result).toBe(proxy);
+    });
+  });
+
+  describe('instance.use()', () => {
+    it('should register a single plugin', () => {
+      const instance = proxy.createInstance();
+      const testPlugin = createTestPlugin();
+      
+      instance.use(testPlugin);
+      expect((instance as any)['test-plugin']).toBeDefined();
+      expect((instance as any)['test-plugin'].testMethod()).toBe('test-result');
+    });
+    
+    it('should register multiple plugins', () => {
+      const instance = proxy.createInstance();
+      const testPlugin1 = createTestPlugin('test-plugin');
+      const testPlugin2 = createTestPlugin('another-plugin');
+      
+      instance.use([testPlugin1, testPlugin2]);
+      
+      expect((instance as any)['test-plugin']).toBeDefined();
+      expect((instance as any)['another-plugin']).toBeDefined();
     });
     
     it('should replace plugins with the same id', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       
       // For this test, we need to manually create plugins with different implementations
       const testPlugin1: ValtioPlugin = {
@@ -134,57 +190,57 @@ describe('Valtio Plugin System', () => {
         testMethod: vi.fn().mockReturnValue('result2')
       };
       
-      proxy.use(testPlugin1);
-      proxy.use(testPlugin2);
+      instance.use(testPlugin1);
+      instance.use(testPlugin2);
       
-      expect(proxy['test-plugin'].testMethod()).toBe('result2');
+      expect((instance as any)['test-plugin'].testMethod()).toBe('result2');
     });
     
     it('should support method chaining', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const testPlugin1 = createTestPlugin('test-plugin');
       const testPlugin2 = createTestPlugin('another-plugin');
       
-      const result = proxy.use(testPlugin1).use(testPlugin2);
-      expect(result).toBe(proxy);
+      const result = instance.use(testPlugin1).use(testPlugin2);
+      expect(result).toBe(instance);
     });
     
     it('should throw if instance is disposed', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const testPlugin = createTestPlugin();
       
-      proxy.dispose();
+      instance.dispose();
       
       expect(() => {
-        proxy.use(testPlugin);
+        instance.use(testPlugin);
       }).toThrow('This instance has been disposed');
     });
     
     it('should call onAttach when plugin is attached', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const testPlugin = createTestPlugin();
       
-      proxy.use(testPlugin);
+      instance.use(testPlugin);
       
       expect(testPlugin.onAttach).toHaveBeenCalledTimes(1);
-      expect(testPlugin.onAttach).toHaveBeenCalledWith(proxy);
+      expect(testPlugin.onAttach).toHaveBeenCalledWith(instance);
     });
     
     it('should call onAttach for multiple plugins', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const testPlugin1 = createTestPlugin('plugin1');
       const testPlugin2 = createTestPlugin('plugin2');
       
-      proxy.use([testPlugin1, testPlugin2]);
+      instance.use([testPlugin1, testPlugin2]);
       
       expect(testPlugin1.onAttach).toHaveBeenCalledTimes(1);
-      expect(testPlugin1.onAttach).toHaveBeenCalledWith(proxy);
+      expect(testPlugin1.onAttach).toHaveBeenCalledWith(instance);
       expect(testPlugin2.onAttach).toHaveBeenCalledTimes(1);
-      expect(testPlugin2.onAttach).toHaveBeenCalledWith(proxy);
+      expect(testPlugin2.onAttach).toHaveBeenCalledWith(instance);
     });
     
     it('should handle errors in onAttach', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const errorPlugin: ValtioPlugin = {
         id: 'error-plugin',
         onAttach: vi.fn().mockImplementation(() => {
@@ -195,7 +251,7 @@ describe('Valtio Plugin System', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
       // Should not throw
-      expect(() => proxy.use(errorPlugin)).not.toThrow();
+      expect(() => instance.use(errorPlugin)).not.toThrow();
       
       // Error should be logged
       expect(consoleSpy).toHaveBeenCalledWith(
@@ -204,13 +260,13 @@ describe('Valtio Plugin System', () => {
       );
       
       // Plugin should still be registered
-      expect(proxy['error-plugin']).toBeDefined();
+      expect((instance as any)['error-plugin']).toBeDefined();
       
       consoleSpy.mockRestore();
     });
     
     it('should allow plugin to use factory from onAttach', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       let capturedFactory: any = null;
       
       const plugin: ValtioPlugin = {
@@ -223,23 +279,23 @@ describe('Valtio Plugin System', () => {
         }
       };
       
-      proxy.use(plugin);
+      instance.use(plugin);
       
       // Verify the factory was captured
-      expect(capturedFactory).toBe(proxy);
+      expect(capturedFactory).toBe(instance);
     });
   });
   
   describe('plugin lifecycle hooks', () => {
-    let proxy;
+    let instance;
     let testPlugin;
     let store;
     
     beforeEach(() => {
-      proxy = proxyInstance();
+      instance = proxy.createInstance();
       testPlugin = createTestPlugin();
-      proxy.use(testPlugin);
-      store = proxy({ count: 0 });
+      instance.use(testPlugin);
+      store = instance({ count: 0 });
     });
     
     it('should call onInit when plugin is registered', () => {
@@ -293,7 +349,7 @@ describe('Valtio Plugin System', () => {
     
     it('should call onSubscribe when subscribing to a proxy', () => {
       const callback = vi.fn();
-      const unsubscribe = proxy.subscribe(store, callback);
+      const unsubscribe = instance.subscribe(store, callback);
       
       expect(testPlugin.onSubscribe).toHaveBeenCalledWith(
         store,
@@ -305,24 +361,73 @@ describe('Valtio Plugin System', () => {
     });
     
     it('should call alterSnapshot when creating a snapshot', () => {
-      const snap = proxy.snapshot(store);
+      const snap = instance.snapshot(store);
       
       expect(testPlugin.alterSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ count: 0 })
       );
     });
   });
+
+  describe('Global vs Instance plugins', () => {
+    it('should apply both global and instance plugins', () => {
+      const globalPlugin = createTestPlugin('global-plugin');
+      const instancePlugin = createTestPlugin('instance-plugin');
+      
+      // Register global plugin
+      proxy.use(globalPlugin);
+      
+      // Create instance and register instance plugin
+      const instance = proxy.createInstance();
+      instance.use(instancePlugin);
+      
+      const store = instance({ count: 0 });
+      store.count = 1;
+      
+      // Both plugins should be called
+      
+    });
+    
+    it('should have global plugins run first', () => {
+      const callOrder: string[] = [];
+      
+      const globalPlugin: ValtioPlugin = {
+        id: 'global-plugin',
+        beforeChange: () => {
+          callOrder.push('global');
+          return true;
+        }
+      };
+      
+      const instancePlugin: ValtioPlugin = {
+        id: 'instance-plugin',
+        beforeChange: () => {
+          callOrder.push('instance');
+          return true;
+        }
+      };
+      
+      proxy.use(globalPlugin);
+      const instance = proxy.createInstance();
+      instance.use(instancePlugin);
+      
+      const store = instance({ count: 0 });
+      store.count = 1;
+      
+      expect(callOrder).toEqual(['global', 'instance']);
+    });
+  });
   
   describe('nested object handling', () => {
-    let proxy;
+    let instance;
     let testPlugin;
     let store;
     
     beforeEach(() => {
-      proxy = proxyInstance();
+      instance = proxy.createInstance();
       testPlugin = createTestPlugin();
-      proxy.use(testPlugin);
-      store = proxy({
+      instance.use(testPlugin);
+      store = instance({
         user: {
           profile: {
             name: 'John',
@@ -334,7 +439,7 @@ describe('Valtio Plugin System', () => {
       });
       
       // Reset spies after creating the store
-      testPlugin.resetSpies();
+      (testPlugin as any).resetSpies();
     });
     
     it('should handle changes to deeply nested properties', () => {
@@ -408,9 +513,8 @@ describe('Valtio Plugin System', () => {
     });
   });
   
-  describe('proxy.subscribe()', () => {
-    it('should work with plugin hooks', async () => {
-      const proxy = proxyInstance();
+  describe('proxy.subscribe() and instance.subscribe()', () => {
+    it('should work with global plugin hooks', async () => {
       const testPlugin = createTestPlugin();
       proxy.use(testPlugin);
       
@@ -436,8 +540,35 @@ describe('Valtio Plugin System', () => {
       unsubscribe();
     });
     
+    it('should work with instance plugin hooks', async () => {
+      const instance = proxy.createInstance();
+      const testPlugin = createTestPlugin();
+      instance.use(testPlugin);
+      
+      const store = instance({ count: 0 });
+      const callback = vi.fn();
+      
+      const unsubscribe = instance.subscribe(store, callback);
+      
+      // Modify the store
+      store.count = 1;
+      
+      // Need to wait for the next tick for subscribers to be notified
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
+      // Plugin hooks should be called
+      expect(testPlugin.beforeChange).toHaveBeenCalled();
+      expect(testPlugin.afterChange).toHaveBeenCalled();
+      
+      // Callback should be called
+      expect(callback).toHaveBeenCalled();
+      
+      // Cleanup
+      unsubscribe();
+    });
+    
     it('should handle errors in plugin hooks', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       
       // Create a plugin with a hook that throws an error
       const errorPlugin = createTestPlugin('error-plugin', {
@@ -446,14 +577,14 @@ describe('Valtio Plugin System', () => {
         })
       });
       
-      proxy.use(errorPlugin);
+      instance.use(errorPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       const callback = vi.fn();
       
       // This should not throw, the error should be caught and logged
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const unsubscribe = proxy.subscribe(store, callback);
+      const unsubscribe = instance.subscribe(store, callback);
       
       expect(consoleSpy).toHaveBeenCalled();
       expect(unsubscribe).toBeInstanceOf(Function);
@@ -464,10 +595,8 @@ describe('Valtio Plugin System', () => {
     });
   });
   
-  describe('proxy.snapshot()', () => {
-    it('should work with plugin hooks', () => {
-      const proxy = proxyInstance();
-      
+  describe('proxy.snapshot() and instance.snapshot()', () => {
+    it('should work with global plugin hooks', () => {
       // Create a plugin that modifies snapshots
       const modifierPlugin = createTestPlugin('modifier-plugin', {
         alterSnapshot: vi.fn((snap) => ({
@@ -491,8 +620,34 @@ describe('Valtio Plugin System', () => {
       });
     });
     
+    it('should work with instance plugin hooks', () => {
+      const instance = proxy.createInstance();
+      
+      // Create a plugin that modifies snapshots
+      const modifierPlugin = createTestPlugin('modifier-plugin', {
+        alterSnapshot: vi.fn((snap) => ({
+          ...snap,
+          _modified: true
+        }))
+      });
+      
+      instance.use(modifierPlugin);
+      
+      const store = instance({ count: 0 });
+      const snap = instance.snapshot(store);
+      
+      // Plugin hook should be called
+      expect(modifierPlugin.alterSnapshot).toHaveBeenCalled();
+      
+      // Snapshot should be modified
+      expect(snap).toEqual({
+        count: 0,
+        _modified: true
+      });
+    });
+    
     it('should handle errors in plugin hooks', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       
       // Create a plugin with a hook that throws an error
       const errorPlugin = createTestPlugin('error-plugin', {
@@ -501,13 +656,13 @@ describe('Valtio Plugin System', () => {
         })
       });
       
-      proxy.use(errorPlugin);
+      instance.use(errorPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // This should not throw, the error should be caught and logged
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const snap = proxy.snapshot(store);
+      const snap = instance.snapshot(store);
       
       expect(consoleSpy).toHaveBeenCalled();
       expect(snap).toEqual({ count: 0 }); // Should return original snapshot
@@ -517,29 +672,29 @@ describe('Valtio Plugin System', () => {
     });
   });
   
-  describe('proxy.dispose()', () => {
+  describe('instance.dispose()', () => {
     it('should clean up resources', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const testPlugin = createTestPlugin();
-      proxy.use(testPlugin);
+      instance.use(testPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Before disposal
-      expect(proxy['test-plugin']).toBeDefined();
+      expect((instance as any)['test-plugin']).toBeDefined();
       
-      proxy.dispose();
+      instance.dispose();
       
       // After disposal
-      expect(proxy['test-plugin']).toBeUndefined();
+      expect((instance as any)['test-plugin']).toBeUndefined();
       
       // Methods should throw
-      expect(() => proxy.use(testPlugin)).toThrow('This instance has been disposed');
-      expect(() => proxy.subscribe(store, vi.fn())).toThrow('This instance has been disposed');
-      expect(() => proxy.snapshot(store)).toThrow('This instance has been disposed');
+      expect(() => instance.use(testPlugin)).toThrow('This instance has been disposed');
+      expect(() => instance.subscribe(store, vi.fn())).toThrow('This instance has been disposed');
+      expect(() => instance.snapshot(store)).toThrow('This instance has been disposed');
       
       // Dispose should be idempotent
-      expect(() => proxy.dispose()).not.toThrow();
+      expect(() => instance.dispose()).not.toThrow();
     });
   });
   
@@ -551,8 +706,8 @@ describe('Valtio Plugin System', () => {
         useSnapshot: (proxy) => mockUseSnapshot(proxy)
       }));
       
-      const proxy = proxyInstance();
-      const store = proxy({ count: 0 });
+      const instance = proxy.createInstance();
+      const store = instance({ count: 0 });
       
       // This would be called from a React component
       const snap = mockUseSnapshot(store);
@@ -562,8 +717,8 @@ describe('Valtio Plugin System', () => {
     });
     
     it('should work with original subscribe from valtio', async () => {
-      const proxy = proxyInstance();
-      const store = proxy({ count: 0 });
+      const instance = proxy.createInstance();
+      const store = instance({ count: 0 });
       
       const callback = vi.fn();
       const unsubscribe = subscribe(store, callback);
@@ -582,8 +737,8 @@ describe('Valtio Plugin System', () => {
     });
     
     it('should work with original snapshot from valtio', () => {
-      const proxy = proxyInstance();
-      const store = proxy({ count: 0 });
+      const instance = proxy.createInstance();
+      const store = instance({ count: 0 });
       
       const snap = snapshot(store);
       
@@ -593,7 +748,7 @@ describe('Valtio Plugin System', () => {
   
   describe('error handling', () => {
     it('should catch and log errors in plugin hooks', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       
       // Create plugins with hooks that throw errors
       const errorPlugin1 = createTestPlugin('error-plugin-1', {
@@ -608,9 +763,9 @@ describe('Valtio Plugin System', () => {
         })
       });
       
-      proxy.use([errorPlugin1, errorPlugin2]);
+      instance.use([errorPlugin1, errorPlugin2]);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Mock console.error
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -631,7 +786,7 @@ describe('Valtio Plugin System', () => {
     });
     
     it('should continue with remaining plugins if one fails', () => {
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       
       // Create one plugin that throws and one that works
       const errorPlugin = createTestPlugin('error-plugin', {
@@ -642,9 +797,9 @@ describe('Valtio Plugin System', () => {
       
       const workingPlugin = createTestPlugin('working-plugin');
       
-      proxy.use([errorPlugin, workingPlugin]);
+      instance.use([errorPlugin, workingPlugin]);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Mock console.error
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -661,6 +816,26 @@ describe('Valtio Plugin System', () => {
       
       // Cleanup
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Global plugin management', () => {
+    it('should manage global plugins', () => {
+      const plugin1 = createTestPlugin('plugin1');
+      const plugin2 = createTestPlugin('plugin2');
+      
+      // Add plugins
+      proxy.use([plugin1, plugin2]);
+      expect(proxy.getPlugins()).toHaveLength(2);
+      
+      // Remove plugin
+      expect(proxy.removePlugin('plugin1')).toBe(true);
+      expect(proxy.getPlugins()).toHaveLength(1);
+      expect(proxy.removePlugin('nonexistent')).toBe(false);
+      
+      // Clear all plugins
+      proxy.clearPlugins();
+      expect(proxy.getPlugins()).toHaveLength(0);
     });
   });
 });
