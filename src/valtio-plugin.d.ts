@@ -54,20 +54,3 @@ export interface EnhancedGlobalProxy {
   [pluginId: string]: unknown // For plugin access
 }
 
-// Module augmentation to add methods to valtio's proxy
-declare module 'valtio' {
-  interface proxy {
-    use(pluginOrPlugins: ValtioPlugin | ValtioPlugin[]): EnhancedGlobalProxy
-    subscribe<T extends object>(
-      proxyObject: T,
-      callback: (ops: INTERNAL_Op[]) => void,
-      notifyInSync?: boolean
-    ): (() => void)
-    snapshot<T extends object>(proxyObject: T): Snapshot<T>
-    removePlugin(pluginId: string): boolean
-    getPlugins(): readonly ValtioPlugin[]
-    clearPlugins(): void
-    createInstance(): ProxyFactory
-    [pluginId: string]: unknown // For plugin access
-  }
-}
