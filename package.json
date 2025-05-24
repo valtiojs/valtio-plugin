@@ -8,6 +8,16 @@
     "type": "git",
     "url": "git+https://github.com/valtiojs/valtio-plugin.git"
   },
+  "keywords": [
+    "valtio",
+    "plugin",
+    "state-management",
+    "react",
+    "typescript",
+    "proxy",
+    "hooks",
+    "middleware"
+  ],
   "source": "./src/index.ts",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
