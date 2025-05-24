@@ -1,7 +1,9 @@
-// test/integration.test.ts
+
+
 import { expect, describe, it, vi, beforeEach } from 'vitest';
 import { useSnapshot } from 'valtio/react';
-import { proxyInstance } from '../src';
+// Import the enhanced proxy
+import { proxy } from '../src'
 
 // Mock React for testing
 vi.mock('react', () => ({
@@ -20,6 +22,11 @@ vi.mock('valtio/react', () => ({
 }));
 
 describe('Integration Tests', () => {
+  beforeEach(() => {
+    // Clear all global plugins before each test
+    proxy.clearPlugins();
+  });
+
   describe('Real-world plugin usage', () => {
     it('should work with a persistence plugin', () => {
       // Mock localStorage
@@ -51,11 +58,11 @@ describe('Integration Tests', () => {
       });
       
       // Use the plugin
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const persistPlugin = createPersistPlugin({ name: 'my-store' });
-      proxy.use(persistPlugin);
+      instance.use(persistPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Initial state should trigger localStorage.getItem
       expect(mockStorage.getItem).toHaveBeenCalledWith('my-store');
@@ -65,11 +72,11 @@ describe('Integration Tests', () => {
       expect(mockStorage.setItem).toHaveBeenCalledWith('my-store', expect.any(String));
       
       // We should be able to access the plugin API
-      proxy.persist.pause();
-      expect(proxy.persist.pause).toHaveBeenCalled();
+      (instance as any).persist.pause();
+      expect((instance as any).persist.pause).toHaveBeenCalled();
     });
     
-    it('should work with a logging plugin', () => {
+    it('should work with a global logging plugin', () => {
       // Mock logger
       const mockLogger = {
         debug: vi.fn(),
@@ -97,21 +104,20 @@ describe('Integration Tests', () => {
         },
       });
       
-      // Use the plugin
-      const proxy = proxyInstance();
+      // Use the plugin globally
       const loggerPlugin = createLoggerPlugin({ level: 'debug' });
       proxy.use(loggerPlugin);
       
       const store = proxy({ count: 0 });
       
       // Log methods should be accessible
-      proxy.logger.debug('Custom debug message');
-      expect(proxy.logger.debug).toHaveBeenCalledWith('Custom debug message');
+      (proxy as any).logger.debug('Custom debug message');
+      expect((proxy as any).logger.debug).toHaveBeenCalledWith('Custom debug message');
       
       // Changing state should trigger log messages
       store.count = 1;
-      expect(proxy.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Will change count'));
-      expect(proxy.logger.info).toHaveBeenCalledWith(expect.stringContaining('Changed count'));
+      expect((proxy as any).logger.debug).toHaveBeenCalledWith(expect.stringContaining('Will change count'));
+      expect((proxy as any).logger.info).toHaveBeenCalledWith(expect.stringContaining('Changed count'));
     });
     
     it('should work with a validation plugin', () => {
@@ -135,11 +141,11 @@ describe('Integration Tests', () => {
       });
       
       // Use the plugin
-      const proxy = proxyInstance();
+      const instance = proxy.createInstance();
       const validationPlugin = createValidationPlugin();
-      proxy.use(validationPlugin);
+      instance.use(validationPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Valid change should work
       store.count = 5;
@@ -167,10 +173,10 @@ describe('Integration Tests', () => {
         alterSnapshot: vi.fn(snapshot => snapshot),
       };
       
-      const proxy = proxyInstance();
-      proxy.use(testPlugin);
+      const instance = proxy.createInstance();
+      instance.use(testPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Mock useSnapshot
       const mockSnap = useSnapshot(store);
@@ -216,10 +222,10 @@ describe('Integration Tests', () => {
       };
       
       // Register all plugins
-      const proxy = proxyInstance();
-      proxy.use([validationPlugin, loggingPlugin, transformPlugin]);
+      const instance = proxy.createInstance();
+      instance.use([validationPlugin, loggingPlugin, transformPlugin]);
       
-      const store = proxy({ count: 0 });
+      const store = instance({ count: 0 });
       
       // Valid change (even number)
       store.count = 2;
@@ -239,6 +245,60 @@ describe('Integration Tests', () => {
       expect(loggingPlugin.beforeChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
       expect(transformPlugin.beforeChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
       expect(loggingPlugin.afterChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
+    });
+  });
+
+  describe('Global vs Instance plugins', () => {
+    it('should demonstrate global plugins affecting all stores', () => {
+      const globalPlugin = {
+        id: 'global-logger',
+        afterChange: vi.fn(),
+      };
+      
+      // Register global plugin
+      proxy.use(globalPlugin);
+      
+      // Create multiple stores - both should be affected
+      const store1 = proxy({ count: 0 });
+      const store2 = proxy({ value: 'test' });
+      
+      store1.count = 1;
+      store2.value = 'changed';
+      
+      // Global plugin should be called for both stores
+      expect(globalPlugin.afterChange).toHaveBeenCalledTimes(2);
+    });
+    
+    it('should demonstrate instance plugins only affecting instance stores', () => {
+      const globalPlugin = {
+        id: 'global-logger',
+        afterChange: vi.fn(),
+      };
+      
+      const instancePlugin = {
+        id: 'instance-logger',
+        afterChange: vi.fn(),
+      };
+      
+      // Register global plugin
+      proxy.use(globalPlugin);
+      
+      // Create instance with its own plugin
+      const instance = proxy.createInstance();
+      instance.use(instancePlugin);
+      
+      // Create stores
+      const globalStore = proxy({ count: 0 });
+      const instanceStore = instance({ count: 0 });
+      
+      globalStore.count = 1;
+      instanceStore.count = 1;
+      
+      // Global plugin should be called for both
+      expect(globalPlugin.afterChange).toHaveBeenCalledTimes(2);
+      
+      // Instance plugin should only be called for instance store
+      expect(instancePlugin.afterChange).toHaveBeenCalledTimes(1);
     });
   });
 });

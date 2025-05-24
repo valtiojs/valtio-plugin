@@ -112,10 +112,8 @@ const addMetaData = (obj: object, meta: {
 const getApplicablePlugins = (obj: object): ValtioPlugin[] => {
   const plugins: ValtioPlugin[] = []
   
-  // Add global plugins if this is a global-enhanced proxy
-  if (isGlobalProxy(obj)) {
-    plugins.push(...globalPluginRegistry)
-  }
+  // Always add global plugins first (they run before instance plugins)
+  plugins.push(...globalPluginRegistry)
   
   // Add instance-specific plugins if this is an instance proxy
   if (hasInstanceId(obj)) {
@@ -783,8 +781,175 @@ function createProxyInstance(): ProxyFactory {
 // Initialize the plugin system when this module is imported
 initializePluginSystem()
 
+// Create enhanced global proxy with all required methods
+const createEnhancedGlobalProxy = (): EnhancedGlobalProxy => {
+  const globalId = createGlobalId()
+
+  const createGlobalProxy = <T extends object>(initialState: T): T => {
+    // Use the original proxy function from valtio
+    const valtioProxyInstance = valtioProxy(initialState)
+    
+    // Add global metadata
+    const meta = { rootProxy: valtioProxyInstance, instanceId: globalId, path: [], isGlobal: true}
+    addMetaData(valtioProxyInstance, meta)
+
+    // Call plugin initialization hooks for global plugins
+    for(const plugin of globalPluginRegistry) {
+      if (plugin.onInit) {
+        try {
+          plugin.onInit()
+        } catch (e) {
+          console.error(`Error in plugin ${plugin.id} onInit:`, e)
+        }
+      }
+    }
+
+    return valtioProxyInstance
+  }
+
+  // Create a proxy for the global function to expose plugin APIs and methods
+  const globalProxyFn = new Proxy(createGlobalProxy, {
+    get(target, prop) {
+      // First check if it's one of our methods
+      if (prop === 'use' || prop === 'subscribe' || prop === 'snapshot' || prop === 'createInstance' || 
+          prop === 'clearPlugins' || prop === 'getPlugins' || prop === 'removePlugin') {
+        return Reflect.get(target, prop)
+      }
+
+      // Check if it's a plugin
+      if (typeof prop === 'string') {
+        const plugin = globalPluginRegistry.find(p => p.id === prop)
+        if (plugin) {
+          return plugin // Return the whole plugin object
+        }
+      }
+      
+      // Otherwise return the property from the target
+      return Reflect.get(target, prop)
+    }
+  })
+
+  // Add methods to the proxied global function
+  Object.defineProperties(globalProxyFn, {
+    use: {
+      value: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => {
+        const pluginsToAdd = Array.isArray(pluginOrPlugins) 
+          ? pluginOrPlugins 
+          : [pluginOrPlugins]
+
+        for (const plugin of pluginsToAdd) {
+          const existingIndex = globalPluginRegistry.findIndex(p => p.id === plugin.id)
+          if (existingIndex >= 0) {
+            globalPluginRegistry[existingIndex] = plugin
+          } else {
+            globalPluginRegistry.push(plugin)
+          }
+          
+          // Call onAttach if it exists
+          if (plugin.onAttach) {
+            try {
+              plugin.onAttach(globalProxyFn as EnhancedGlobalProxy)
+            } catch (e) {
+              console.error(`Error in plugin ${plugin.id} onAttach:`, e)
+            }
+          }
+        }
+        
+        return globalProxyFn as EnhancedGlobalProxy // For chaining
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    subscribe: {
+      value: <T extends object>(
+        proxyObject: T,
+        callback: (ops: INTERNAL_Op[]) => void,
+        notifyInSync?: boolean
+      ): (() => void) => {
+        // Get applicable plugins for this proxy
+        const applicablePlugins = getApplicablePlugins(proxyObject)
+        
+        // Call onSubscribe hooks for all applicable plugins
+        for (const plugin of applicablePlugins) {
+          if (plugin.onSubscribe) {
+            try {
+              plugin.onSubscribe(proxyObject, callback)
+            } catch (e) {
+              console.error(`Error in plugin ${plugin.id} onSubscribe:`, e)
+            }
+          }
+        }
+        
+        return originalSubscribe(proxyObject, callback, notifyInSync)
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    snapshot: {
+      value: <T extends object>(proxyObject: T): Snapshot<T> => {
+        let snap = originalSnapshot(proxyObject) as Record<string, unknown>
+        
+        // Apply alterSnapshot hooks from applicable plugins
+        const applicablePlugins = getApplicablePlugins(proxyObject)
+        for (const plugin of applicablePlugins) {
+          if (plugin.alterSnapshot) {
+            try {
+              snap = plugin.alterSnapshot(snap)
+            } catch (e) {
+              console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+            }
+          }
+        }
+        
+        return snap as Snapshot<T>
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    createInstance: {
+      value: () => createProxyInstance(),
+      enumerable: true,
+      configurable: true,
+    },
+
+    clearPlugins: {
+      value: () => {
+        globalPluginRegistry.length = 0
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    getPlugins: {
+      value: () => {
+        return [...globalPluginRegistry] as readonly ValtioPlugin[]
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    removePlugin: {
+      value: (pluginId: string): boolean => {
+        const index = globalPluginRegistry.findIndex(p => p.id === pluginId)
+        if (index >= 0) {
+          globalPluginRegistry.splice(index, 1)
+          return true
+        }
+        return false
+      },
+      enumerable: true,
+      configurable: true,
+    }
+  })
+
+  return globalProxyFn as EnhancedGlobalProxy
+}
+
 // Export the enhanced proxy with proper types
-export const enhancedProxy = valtioProxy as EnhancedGlobalProxy
+export const enhancedProxy = createEnhancedGlobalProxy()
 
 // Re-export as proxy for direct import from valtio-plugin
 export { enhancedProxy as proxy }
