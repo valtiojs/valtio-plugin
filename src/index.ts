@@ -1,6 +1,6 @@
 import {
   type INTERNAL_Op,
-  proxy as originalProxy,
+  proxy as valtioProxy,
   snapshot as originalSnapshot,
   subscribe as originalSubscribe,
   Snapshot,
@@ -8,55 +8,26 @@ import {
   unstable_replaceInternalFunction,
 } from 'valtio'
 
+// Import types from the separate augmentation file
+import type { ValtioPlugin, ProxyFactory, EnhancedGlobalProxy } from './valtio-plugin'
+
+// Re-export types for convenience
+export type { ValtioPlugin, ProxyFactory, EnhancedGlobalProxy }
+
 const ROOT_PROXY_SYMBOL = Symbol('valtio-plugin-root')
 const PROXY_PATH_SYMBOL = Symbol('valtio-plugin-path')
 const INSTANCE_ID_SYMBOL = Symbol('valtio-plugin-instance-id')
+const GLOBAL_PROXY_SYMBOL = Symbol('valtio-plugin-global')
 
 const { proxyStateMap } = unstable_getInternalStates()
-
-// Plugin type definition
-export type ValtioPlugin = {
-  id: string
-  name?: string
-  
-  // Lifecycle hooks
-  onInit?: () => void
-  onAttach?: (proxyFactory: ProxyFactory) => void
-  beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
-  afterChange?: (path: string[], value: unknown, state: object) => void
-  onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
-  onGet?: (path: string[], value: unknown, state: object) => void
-  onDispose?: () => void
-  
-  // Path-specific handlers
-  pathHandlers?: Record<string, (value: unknown, state: object) => void>
-  
-  // Snapshot modification
-  alterSnapshot?: (snapshot: Record<string, unknown>) => Record<string, unknown>
-
-  // Plugin authors should be able to add whatevery they want here
-  [key: string]: any
-}
-
-// Define the type for the proxy factory function
-export interface ProxyFactory {
-  <T extends object>(initialState: T): T
-  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => ProxyFactory
-  subscribe: <T extends object>(
-    proxyObject: T,
-    callback: (ops: INTERNAL_Op[]) => void,
-    notifyInSync?: boolean
-  ) => (() => void)
-  snapshot: <T extends object>(proxyObject: T) => Snapshot<T> | Record<string, unknown>
-  dispose: () => void
-  [key: string | symbol]: any // For plugin symbol access
-}
 
 interface EnhancedProxy {
   [ROOT_PROXY_SYMBOL]?: object,
   [PROXY_PATH_SYMBOL]?: (string | symbol)[],
-  [INSTANCE_ID_SYMBOL]?: string
+  [INSTANCE_ID_SYMBOL]?: string,
+  [GLOBAL_PROXY_SYMBOL]?: boolean
 }
+
 // type guards
 const hasRootProxy = (obj: object): obj is EnhancedProxy => {
   return ROOT_PROXY_SYMBOL in obj
@@ -70,9 +41,17 @@ const hasInstanceId = (obj: object): obj is EnhancedProxy => {
   return INSTANCE_ID_SYMBOL in obj
 }
 
+const isGlobalProxy = (obj: object): obj is EnhancedProxy => {
+  return GLOBAL_PROXY_SYMBOL in obj
+}
+
 let currentId = 0
 const createInstanceId = () => {
   return `valtio-plugin-${currentId++}`
+}
+
+const createGlobalId = () => {
+  return `valtio-global-${currentId++}`
 }
 
 const isObject = (x: unknown): x is object =>
@@ -84,10 +63,17 @@ interface InstanceRegistry {
   isDisposed: boolean
 }
 
+// Global plugin registry for enhanced proxy
+const globalPluginRegistry: ValtioPlugin[] = []
 const instanceRegistry = new Map<string, InstanceRegistry>()
 
-const addMetaData = (obj: object, meta: {rootProxy?: object, instanceId?: string, path?: (string | symbol)[]}) => {
-  const { rootProxy, instanceId, path } = meta
+const addMetaData = (obj: object, meta: {
+  rootProxy?: object, 
+  instanceId?: string, 
+  path?: (string | symbol)[],
+  isGlobal?: boolean
+}) => {
+  const { rootProxy, instanceId, path, isGlobal } = meta
 
   if (rootProxy) {
     Object.defineProperty(obj, ROOT_PROXY_SYMBOL, {
@@ -112,6 +98,205 @@ const addMetaData = (obj: object, meta: {rootProxy?: object, instanceId?: string
       configurable: true
     })
   }
+
+  if (isGlobal) {
+    Object.defineProperty(obj, GLOBAL_PROXY_SYMBOL, {
+      value: true,
+      enumerable: false,
+      configurable: true
+    })
+  }
+}
+
+// Helper to get all applicable plugins for a proxy
+const getApplicablePlugins = (obj: object): ValtioPlugin[] => {
+  const plugins: ValtioPlugin[] = []
+  
+  // Add global plugins if this is a global-enhanced proxy
+  if (isGlobalProxy(obj)) {
+    plugins.push(...globalPluginRegistry)
+  }
+  
+  // Add instance-specific plugins if this is an instance proxy
+  if (hasInstanceId(obj)) {
+    const instanceId = obj[INSTANCE_ID_SYMBOL]
+    const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
+    if (registry && !registry.isDisposed) {
+      plugins.push(...registry.plugins)
+    }
+  }
+  
+  return plugins
+}
+
+let isProxyEnhanced = false
+
+// Function to enhance the proxy function with plugin methods
+const enhanceProxyFunction = () => {
+  if (isProxyEnhanced) return
+  isProxyEnhanced = true
+
+  // Add methods directly to the proxy function
+  Object.defineProperties(valtioProxy, {
+    use: {
+      value: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => {
+        const pluginsToAdd = Array.isArray(pluginOrPlugins) 
+          ? pluginOrPlugins 
+          : [pluginOrPlugins]
+
+        for (const plugin of pluginsToAdd) {
+          const existingIndex = globalPluginRegistry.findIndex(p => p.id === plugin.id)
+          if (existingIndex >= 0) {
+            globalPluginRegistry[existingIndex] = plugin
+          } else {
+            globalPluginRegistry.push(plugin)
+          }
+          
+          // Call onAttach if it exists
+          if (plugin.onAttach) {
+            try {
+              plugin.onAttach(valtioProxy as EnhancedGlobalProxy)
+            } catch (e) {
+              console.error(`Error in global plugin ${plugin.id} onAttach:`, e)
+            }
+          }
+        }
+        
+        return valtioProxy as EnhancedGlobalProxy
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    subscribe: {
+      value: <T extends object>(
+        proxyObject: T,
+        callback: (ops: INTERNAL_Op[]) => void,
+        notifyInSync?: boolean
+      ): (() => void) => {
+        // Run onSubscribe hooks for applicable plugins
+        if (isObject(proxyObject)) {
+          const applicablePlugins = getApplicablePlugins(proxyObject)
+          for (const plugin of applicablePlugins) {
+            if (plugin.onSubscribe) {
+              try {
+                plugin.onSubscribe(proxyObject, callback)
+              } catch (e) {
+                console.error(`Error in plugin ${plugin.id} onSubscribe:`, e)
+              }
+            }
+          }
+        }
+        
+        return originalSubscribe(proxyObject, callback, notifyInSync)
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    snapshot: {
+      value: <T extends object>(proxyObject: T): Snapshot<T> => {
+        let snap: Record<string, unknown> = originalSnapshot(proxyObject) as Record<string, unknown>
+        
+        if (isObject(proxyObject)) {
+          const applicablePlugins = getApplicablePlugins(proxyObject)
+          for (const plugin of applicablePlugins) {
+            if (plugin.alterSnapshot) {
+              try {
+                snap = plugin.alterSnapshot(snap)
+              } catch (e) {
+                console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+              }
+            }
+          }
+        }
+        
+        return snap as Snapshot<T>
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    removePlugin: {
+      value: (pluginId: string): boolean => {
+        const index = globalPluginRegistry.findIndex(p => p.id === pluginId)
+        if (index >= 0) {
+          const plugin = globalPluginRegistry[index]
+          
+          // Call onDispose if it exists
+          if (plugin.onDispose) {
+            try {
+              plugin.onDispose()
+            } catch (e) {
+              console.error(`Error disposing global plugin ${plugin.id}:`, e)
+            }
+          }
+          
+          globalPluginRegistry.splice(index, 1)
+          return true
+        }
+        return false
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    getPlugins: {
+      value: (): readonly ValtioPlugin[] => {
+        return [...globalPluginRegistry]
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    clearPlugins: {
+      value: (): void => {
+        for (const plugin of globalPluginRegistry) {
+          if (plugin.onDispose) {
+            try {
+              plugin.onDispose()
+            } catch (e) {
+              console.error(`Error disposing global plugin ${plugin.id}:`, e)
+            }
+          }
+        }
+        globalPluginRegistry.length = 0
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
+    createInstance: {
+      value: (): ProxyFactory => {
+        return createProxyInstance()
+      },
+      enumerable: true,
+      configurable: true,
+    }
+  })
+
+  // Create a proxy wrapper to handle plugin property access
+  const originalValtioProxy = valtioProxy
+  const proxyHandler: ProxyHandler<typeof valtioProxy> = {
+    get(target, prop) {
+      // Check if it's a plugin access
+      if (typeof prop === 'string') {
+        const plugin = globalPluginRegistry.find(p => p.id === prop)
+        if (plugin) {
+          return plugin
+        }
+      }
+      
+      return Reflect.get(target, prop)
+    },
+    
+    apply(target, thisArg, argArray) {
+      return Reflect.apply(target, thisArg, argArray)
+    }
+  }
+
+  // Replace the proxy function in the module's namespace
+  return new Proxy(originalValtioProxy, proxyHandler)
 }
 
 let isInitialized = false
@@ -119,6 +304,41 @@ let isInitialized = false
 const initializePluginSystem = () => {
   if (isInitialized) return
   isInitialized = true
+
+  // Enhance the proxy function with plugin methods
+  enhanceProxyFunction()
+
+  // Use newProxy to intercept proxy creation and add metadata
+  unstable_replaceInternalFunction('newProxy', (originalNewProxy) => {
+    return <T extends object>(target: T, handler: ProxyHandler<T>): T => {
+      const proxyObj = originalNewProxy(target, handler)
+      
+      // Check if this proxy should have global plugins
+      if (globalPluginRegistry.length > 0) {
+        const globalId = createGlobalId()
+        const meta = { 
+          rootProxy: proxyObj, 
+          instanceId: globalId, 
+          path: [], 
+          isGlobal: true 
+        }
+        addMetaData(proxyObj, meta)
+        
+        // Call onInit for global plugins
+        for (const plugin of globalPluginRegistry) {
+          if (plugin.onInit) {
+            try {
+              plugin.onInit()
+            } catch (e) {
+              console.error(`Error in global plugin ${plugin.id} onInit:`, e)
+            }
+          }
+        }
+      }
+      
+      return proxyObj
+    }
+  })
 
   unstable_replaceInternalFunction('createHandler', (originalHandler) => {
     return (isInitializing, addPropListener, removePropListener, notifyUpdate) => {
@@ -129,17 +349,13 @@ const initializePluginSystem = () => {
         notifyUpdate
       )
 
-      // Propagate "root proxy" metadata to nested objects so there's
-      // no need to traverse through objects when modifying nested values
-      // in order to know which "instance" we're working with
-
       /**
        * Get trap
        */
       const originalGet = handler.get
       handler.get = (target, prop, receiver) => {
         // Skip metadata symbol access to prevent infinite recursion
-        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL || prop === GLOBAL_PROXY_SYMBOL) {
           return Reflect.get(target, prop, receiver)
         }
         
@@ -150,10 +366,9 @@ const initializePluginSystem = () => {
         // Get metadata for plugin hooks
         const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
         const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
-        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
 
         // If the result of the get is a proxy object (i.e. nested object)
-        // make sure to propagate the "root" (aka instance) meta data
+        // make sure to propagate the metadata
         if (isObject(result) && result !== receiver) {
           if (rootProxy) {
             // If result doesn't have root metadata yet, add it
@@ -166,7 +381,8 @@ const initializePluginSystem = () => {
               }
 
               const path = [...parentPath, prop]
-              const meta = { rootProxy, instanceId, path }
+              const isGlobal = Reflect.get(receiver, GLOBAL_PROXY_SYMBOL, receiver) as boolean | undefined
+              const meta = { rootProxy, instanceId, path, isGlobal }
 
               if (result) addMetaData(result, meta)
               if (resultTarget) addMetaData(resultTarget, meta)
@@ -174,21 +390,20 @@ const initializePluginSystem = () => {
           }
         }
 
-        // Call onGet hooks for ALL property access (not just nested objects)
+        // Call onGet hooks for ALL property access
         if (
           !isInitializing() &&
           rootProxy && 
-          instanceId &&
-          registry &&
-          !registry.isDisposed
+          instanceId
         ) {
           let basePath: (string | symbol)[] = []
           if (hasProxyPath(receiver)) {
             basePath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
           }
           const fullPath = [...basePath, prop]
+          const applicablePlugins = getApplicablePlugins(receiver)
 
-          for (const plugin of registry.plugins) {
+          for (const plugin of applicablePlugins) {
             if (plugin.onGet) {
               try {
                 plugin.onGet(
@@ -212,21 +427,18 @@ const initializePluginSystem = () => {
       const originalSet = handler.set
       handler.set = (target, prop, value, receiver) => {
         // Skip metadata symbol handling
-        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL || prop === GLOBAL_PROXY_SYMBOL) {
           return Reflect.set(target, prop, value, receiver)
         }
         
         // Get metadata directly using Reflect to avoid infinite recursion
         const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
         const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
-        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
 
         if (
           isInitializing() ||
           !rootProxy || 
-          !instanceId ||
-          !registry ||
-          registry.isDisposed
+          !instanceId
         ) {
           return originalSet
             ? originalSet(target, prop, value, receiver)
@@ -240,8 +452,9 @@ const initializePluginSystem = () => {
           basePath = Reflect.get(receiver, PROXY_PATH_SYMBOL, receiver) as (string | symbol)[]
         }
         const fullPath = [...basePath, prop]
+        const applicablePlugins = getApplicablePlugins(receiver)
 
-        for (const plugin of registry.plugins) {
+        for (const plugin of applicablePlugins) {
           if (plugin.beforeChange) {
             try {
               const shouldContinue = plugin.beforeChange(
@@ -267,7 +480,7 @@ const initializePluginSystem = () => {
 
         // afterChange lifecycle
         if (result) {
-          for (const plugin of registry.plugins) {
+          for (const plugin of applicablePlugins) {
             if (plugin.afterChange) {
               try {
                 plugin.afterChange(
@@ -290,7 +503,7 @@ const initializePluginSystem = () => {
       const originalDeleteProperty = handler.deleteProperty
       handler.deleteProperty = (target, prop) => {
         // Skip metadata symbol handling
-        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL) {
+        if (prop === ROOT_PROXY_SYMBOL || prop === INSTANCE_ID_SYMBOL || prop === PROXY_PATH_SYMBOL || prop === GLOBAL_PROXY_SYMBOL) {
           return Reflect.deleteProperty(target, prop)
         }
         
@@ -320,15 +533,13 @@ const initializePluginSystem = () => {
           basePath = Reflect.get(target, PROXY_PATH_SYMBOL, target) as (string | symbol)[]
         }
         
-        const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
         const fullPath = [...basePath, prop]
+        const applicablePlugins = getApplicablePlugins(target)
 
         if (
           isInitializing() ||
           !rootProxy || 
-          !instanceId ||
-          !registry ||
-          registry.isDisposed
+          !instanceId
         ) {
           return originalDeleteProperty
             ? originalDeleteProperty(target, prop)
@@ -336,7 +547,7 @@ const initializePluginSystem = () => {
         }
 
         // Run beforeChange hooks
-        for (const plugin of registry.plugins) {
+        for (const plugin of applicablePlugins) {
           if (plugin.beforeChange) {
             try {
               const shouldContinue = plugin.beforeChange(
@@ -362,7 +573,7 @@ const initializePluginSystem = () => {
 
         // Run afterChange hooks
         if (result) {
-          for (const plugin of registry.plugins) {
+          for (const plugin of applicablePlugins) {
             if (plugin.afterChange) {
               try {
                 plugin.afterChange(
@@ -384,7 +595,7 @@ const initializePluginSystem = () => {
   })
 }
 
-export function proxyInstance(): ProxyFactory {
+function createProxyInstance(): ProxyFactory {
   initializePluginSystem()
 
   const instanceId = createInstanceId()
@@ -402,14 +613,14 @@ export function proxyInstance(): ProxyFactory {
       throw new Error('This instance has been disposed')
     }
 
-    // Create the proxy with valtio
-    const valtioProxy = originalProxy(initialState)
+    // Use the original proxy function from valtio
+    const valtioProxyInstance = valtioProxy(initialState)
     
-    // Add our metadata
-    const meta = { rootProxy: valtioProxy, instanceId, path: []}
-    addMetaData(valtioProxy, meta)
+    // Add our metadata - but for instance proxies, not global
+    const meta = { rootProxy: valtioProxyInstance, instanceId, path: []}
+    addMetaData(valtioProxyInstance, meta)
 
-    // Call plugin initialization hooks
+    // Call plugin initialization hooks for instance plugins
     for(const plugin of registry.plugins) {
       if (plugin.onInit) {
         try {
@@ -420,9 +631,7 @@ export function proxyInstance(): ProxyFactory {
       }
     }
 
-    // We need to return valtioProxy directly without wrapping it
-    // because valtio's subscribe and snapshot rely on the original proxy
-    return valtioProxy
+    return valtioProxyInstance
   }
 
   // Create a proxy for the factory function to expose plugin APIs
@@ -571,3 +780,11 @@ export function proxyInstance(): ProxyFactory {
   return proxyFn as ProxyFactory
 }
 
+// Initialize the plugin system when this module is imported
+initializePluginSystem()
+
+// Export the enhanced proxy with proper types
+export const enhancedProxy = valtioProxy as EnhancedGlobalProxy
+
+// Re-export as proxy for direct import from valtio-plugin
+export { enhancedProxy as proxy }

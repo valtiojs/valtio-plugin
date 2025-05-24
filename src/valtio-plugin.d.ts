@@ -1,0 +1,73 @@
+// valtio.d.ts - TypeScript module augmentation for valtio
+import type { INTERNAL_Op, Snapshot } from 'valtio'
+
+// Import our plugin types
+export interface ValtioPlugin {
+  id: string
+  name?: string
+  
+  // Lifecycle hooks
+  onInit?: () => void
+  onAttach?: (proxyFactory: ProxyFactory | EnhancedGlobalProxy) => void
+  beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
+  afterChange?: (path: string[], value: unknown, state: object) => void
+  onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
+  onGet?: (path: string[], value: unknown, state: object) => void
+  onDispose?: () => void
+  
+  // Path-specific handlers
+  pathHandlers?: Record<string, (value: unknown, state: object) => void>
+  
+  // Snapshot modification
+  alterSnapshot?: (snapshot: Record<string, unknown>) => Record<string, unknown>
+
+  // Plugin authors should be able to add whatever they want here
+  [key: string]: unknown
+}
+
+export interface ProxyFactory {
+  <T extends object>(initialState: T): T
+  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => ProxyFactory
+  subscribe: <T extends object>(
+    proxyObject: T,
+    callback: (ops: INTERNAL_Op[]) => void,
+    notifyInSync?: boolean
+  ) => (() => void)
+  snapshot: <T extends object>(proxyObject: T) => Snapshot<T> | Record<string, unknown>
+  dispose: () => void
+  [key: string | symbol]: unknown
+}
+
+export interface EnhancedGlobalProxy {
+  <T extends object>(initialState?: T): T
+  use: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => EnhancedGlobalProxy
+  subscribe: <T extends object>(
+    proxyObject: T,
+    callback: (ops: INTERNAL_Op[]) => void,
+    notifyInSync?: boolean
+  ) => (() => void)
+  snapshot: <T extends object>(proxyObject: T) => Snapshot<T>
+  removePlugin: (pluginId: string) => boolean
+  getPlugins: () => readonly ValtioPlugin[]
+  clearPlugins: () => void
+  createInstance: () => ProxyFactory
+  [pluginId: string]: unknown // For plugin access
+}
+
+// Module augmentation to add methods to valtio's proxy
+declare module 'valtio' {
+  interface proxy {
+    use(pluginOrPlugins: ValtioPlugin | ValtioPlugin[]): EnhancedGlobalProxy
+    subscribe<T extends object>(
+      proxyObject: T,
+      callback: (ops: INTERNAL_Op[]) => void,
+      notifyInSync?: boolean
+    ): (() => void)
+    snapshot<T extends object>(proxyObject: T): Snapshot<T>
+    removePlugin(pluginId: string): boolean
+    getPlugins(): readonly ValtioPlugin[]
+    clearPlugins(): void
+    createInstance(): ProxyFactory
+    [pluginId: string]: unknown // For plugin access
+  }
+}

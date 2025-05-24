@@ -66,8 +66,24 @@
     "vite": "^6.2.5",
     "vitest": "^3.0.9"
   },
+  "packageManager": "pnpm@10.7.0",
   "peerDependencies": {
-    "valtio": "^2.1.4"
+    "@types/react": ">=18.0.0",
+    "react": ">=18.0.0",
+    "valtio": ">=2.1.4"
   },
-  "packageManager": "pnpm@10.7.0"
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "valtio": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "proxy-compare": "^3.0.1"
+  }
 }
