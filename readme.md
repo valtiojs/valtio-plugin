@@ -1,637 +1,480 @@
 # Valtio Plugin System
 
-A plugin system for Valtio that allows extending the state management library with custom functionality without modifying its core.
+A powerful plugin system that extends Valtio with custom functionality while maintaining full TypeScript support and API compatibility.
 
 [![NPM Version](https://img.shields.io/npm/v/valtio-plugin.svg)](https://www.npmjs.com/package/valtio-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-## Installation
+## ✨ Key Features
+
+- 🔌 **Global & Instance Plugins**: Extend Valtio globally or per-instance
+- 📘 **Full TypeScript Support**: Complete autocomplete when importing from 'valtio'
+- 🔄 **Rich Lifecycle Hooks**: `onInit`, `beforeChange`, `afterChange`, `onSubscribe`, `onAttach`
+- 🎯 **Direct Plugin Access**: Access plugins as properties (e.g., `proxy.logger`)
+- ⛓️ **Method Chaining**: `proxy.use(plugin1).use(plugin2)`
+- 🌍 **Module Augmentation**: Import from 'valtio' and get enhanced functionality
+- 🎪 **Zero Breaking Changes**: Works alongside existing Valtio code
+
+## 🚀 Quick Start
 
 ```bash
-# npm
+# Install
 npm install valtio valtio-plugin
 
-# yarn
-yarn add valtio valtio-plugin
-
-# pnpm
-pnpm add valtio valtio-plugin
+# Run the example
+node examples/logging-example.js
 ```
 
-## Basic Usage
+See the [`examples/`](./examples) directory for complete usage examples!
+
+## 📘 TypeScript Magic
+
+When you import this package, the `proxy` from 'valtio' automatically gets enhanced with full TypeScript support:
 
 ```typescript
-import { proxyInstance } from 'valtio-plugin'
+import { proxy } from 'valtio'  // Standard valtio import
+import 'valtio-plugin'          // Enables the magic ✨
 
-// Create a simple logging plugin
-const loggingPlugin = {
+// Now proxy has enhanced methods with full autocomplete:
+proxy.use(myPlugin)           // ✅ Full TypeScript support
+proxy.clearPlugins()          // ✅ Autocomplete works
+proxy.createInstance()        // ✅ Returns ProxyFactory
+proxy.getPlugins()           // ✅ Returns readonly ValtioPlugin[]
+
+// Access your plugins with typing:
+const logger = proxy.logger   // ✅ Your plugin is accessible
+```
+
+## 🌍 Global Plugins
+
+Register plugins that affect **all** proxy instances:
+
+```typescript
+import { proxy } from 'valtio'
+import { ValtioPlugin } from 'valtio-plugin'
+
+// Create a logging plugin
+const loggingPlugin: ValtioPlugin = {
   id: 'logger',
-  name: 'Logging Plugin',
+  name: 'Global Logger',
   
   // Lifecycle hooks
-  afterChange: (path, value, state) => {
-    console.log(`🔄 ${path.join('.')} changed to:`, value)
+  onInit: () => console.log('🚀 Logger initialized'),
+  
+  beforeChange: (path, newValue, oldValue) => {
+    console.log(`📝 ${path.join('.')} changing from ${oldValue} to ${newValue}`)
+    return true // Allow change
   },
   
-  onGet: (path, value, state) => {
-    console.log(`👁️  Accessed ${path.join('.')}: `, value)
+  afterChange: (path, newValue) => {
+    console.log(`✅ ${path.join('.')} = ${newValue}`)
   },
   
-  // Plugin API methods - add whatever you want!
-  log: (level, message) => {
-    console.log(`[${level.toUpperCase()}]:`, message)
+  // Plugin API methods
+  info: (msg) => console.log(`[INFO] ${msg}`),
+  error: (msg) => console.error(`[ERROR] ${msg}`),
+  debug: (msg) => console.log(`[DEBUG] ${msg}`)
+}
+
+// Register globally - affects ALL proxy instances
+proxy.use(loggingPlugin)
+
+// Access plugin methods with full TypeScript support
+proxy.logger.info('Application started!')
+
+// Create stores - logging automatically applies
+const userStore = proxy({ name: 'John', age: 30 })
+const appStore = proxy({ theme: 'dark', version: '1.0' })
+
+// All changes are logged
+userStore.name = 'Jane'      // Logs the change
+appStore.theme = 'light'     // Logs the change
+
+// Create instances that inherit global plugins
+const instance = proxy.createInstance()
+const instanceStore = instance({ data: 'test' })
+instanceStore.data = 'updated' // Also logged by global plugin!
+```
+
+## 🏠 Instance Plugins
+
+Create isolated proxy instances with specific plugins:
+
+```typescript
+import { proxy } from 'valtio'
+import { ValtioPlugin } from 'valtio-plugin'
+
+// Create validation plugin
+const validationPlugin: ValtioPlugin = {
+  id: 'validator',
+  
+  beforeChange: (path, value, oldValue) => {
+    if (typeof value === 'string' && value.length < 2) {
+      console.log(`❌ ${path.join('.')} must be at least 2 characters`)
+      return false // Prevent change
+    }
+    return true
   },
   
-  setLevel: (level) => {
-    console.log('Log level set to:', level)
+  // Plugin API
+  validateRequired: (obj, fields) => {
+    return fields.every(field => obj[field] != null)
+  }
+}
+
+// Create instance with specific plugins
+const instance = proxy.createInstance()
+instance.use(validationPlugin)
+
+// Access instance plugin methods
+instance.validator.validateRequired({ name: 'John' }, ['name']) // true
+
+// Create store with instance plugins
+const formStore = instance({
+  name: '',
+  email: ''
+})
+
+// Validation applies only to this instance
+formStore.name = 'A'     // ❌ Prevented by validation
+formStore.name = 'Alice' // ✅ Allowed
+
+// Other proxy instances are unaffected
+const otherStore = proxy({ name: 'X' }) // ✅ No validation
+```
+
+## 🔄 Plugin Lifecycle Hooks
+
+Plugins can hook into key points in the state management flow:
+
+```typescript
+const comprehensivePlugin: ValtioPlugin = {
+  id: 'comprehensive',
+  
+  // Called when plugin is first registered
+  onInit: () => {
+    console.log('Plugin initialized')
+  },
+  
+  // Called when plugin is attached to a factory
+  onAttach: (proxyFactory) => {
+    console.log('Plugin attached to factory')
+    // Store factory reference for creating related proxies
+  },
+  
+  // Called before any property change
+  beforeChange: (path, newValue, oldValue, state) => {
+    console.log(`Before: ${path.join('.')} = ${oldValue} -> ${newValue}`)
+    return true // Return false to prevent change
+  },
+  
+  // Called after any property change
+  afterChange: (path, newValue, state) => {
+    console.log(`After: ${path.join('.')} = ${newValue}`)
+  },
+  
+  // Called when a subscription is created
+  onSubscribe: (proxyObject, callback) => {
+    console.log('New subscription created')
+  },
+  
+  // Called when creating snapshots (can modify the snapshot)
+  alterSnapshot: (snapshot) => {
+    return { ...snapshot, _timestamp: Date.now() }
+  },
+  
+  // Called when factory is disposed
+  onDispose: () => {
+    console.log('Plugin cleaning up')
+  }
+}
+```
+
+## 🎯 Plugin API Access
+
+Access your plugins directly as properties with full TypeScript support:
+
+```typescript
+// Create plugin with custom methods
+const analyticsPlugin: ValtioPlugin = {
+  id: 'analytics',
+  
+  // Plugin methods
+  track: (event: string, data: any) => {
+    console.log(`📊 ${event}:`, data)
+  },
+  
+  identify: (userId: string) => {
+    console.log(`👤 User: ${userId}`)
+  },
+  
+  // Nested API
+  events: {
+    pageView: (page: string) => console.log(`📄 Page: ${page}`),
+    click: (element: string) => console.log(`🖱️ Click: ${element}`)
   },
   
   // Configuration
   config: {
-    logChanges: true,
-    logAccess: false
+    debug: true,
+    endpoint: 'https://api.example.com'
   }
 }
 
-// Create a proxy factory with the plugin
-const factory = proxyInstance().use(loggingPlugin)
+proxy.use(analyticsPlugin)
 
-// Create state
-const store = factory({
-  count: 0,
-  user: {
-    name: 'John',
-    preferences: {
-      theme: 'dark'
-    }
-  }
-})
-
-// Access plugin API directly - no symbols needed!
-factory.logger.log('info', 'Application started')
-factory.logger.setLevel('debug')
-factory.logger.config.logAccess = true
-
-// State changes trigger plugin hooks
-store.count++ // Logs: "🔄 count changed to: 1"
-store.user.name = 'Jane' // Logs: "🔄 user.name changed to: Jane"
+// Access with full TypeScript autocomplete
+proxy.analytics.track('user_signup', { plan: 'pro' })
+proxy.analytics.identify('user123')
+proxy.analytics.events.pageView('/dashboard')
+proxy.analytics.config.debug = false
 ```
 
-## Why Valtio Plugin?
+## 🏗️ Advanced Plugin Examples
 
-Valtio Plugin provides:
-
-1. **Plugin Extensions**: Add capabilities like persistence, logging, validation, reactive tracking, and more
-2. **Non-Intrusive**: Doesn't change Valtio's core, maintains API compatibility
-3. **Flexible Architecture**: Use plugins globally or on specific stores
-4. **Lifecycle Hooks**: Add custom logic at key points in the state management flow
-5. **TypeScript Support**: Fully typed API for excellent developer experience
-6. **Direct API Access**: Clean, discoverable plugin APIs with full IntelliSense
-7. **Instance Isolation**: Different proxy factories can have different plugin behaviors
-8. **Performance Optimized**: Minimal overhead when plugins aren't used
-
-## Creating a Plugin
-
-Plugins are objects with lifecycle hooks and any custom properties you want to expose:
+### Smart Logger with onAttach
 
 ```typescript
-import type { ValtioPlugin } from 'valtio-plugin'
-
-export const createValidationPlugin = (options = {}) => {
-  const errors = new Map<string, string[]>()
-  
-  const plugin: ValtioPlugin = {
-    id: 'validation',
-    name: 'Validation Plugin',
-    
-    // Lifecycle hooks
-    onInit: () => {
-      console.log('Validation plugin initialized')
-    },
-    
-    beforeChange: (path, value, prevValue, state) => {
-      // Validate the change
-      if (typeof value === 'string' && value.length < 2) {
-        const pathKey = path.join('.')
-        errors.set(pathKey, ['Must be at least 2 characters'])
-        return false // Prevent the change
-      }
-      
-      // Clear errors for valid values
-      errors.delete(path.join('.'))
-      return true // Allow the change
-    },
-    
-    afterChange: (path, value, state) => {
-      console.log(`✅ Validated change: ${path.join('.')} = ${value}`)
-    },
-    
-    // Cleanup when instance is disposed
-    onDispose: () => {
-      errors.clear()
-    },
-    
-    // Plugin API methods - add whatever you want!
-    validate: (schema, value) => {
-      return schema.safeParse(value)
-    },
-    
-    getErrors: () => Array.from(errors.entries()),
-    
-    clearErrors: () => errors.clear(),
-    
-    hasErrors: () => errors.size > 0,
-    
-    // Configuration object
-    config: {
-      strict: options.strict || false,
-      showWarnings: options.showWarnings || true
-    },
-    
-    // Nested API structure
-    rules: {
-      required: (value) => value != null,
-      minLength: (min) => (value) => typeof value === 'string' && value.length >= min,
-      email: (value) => /\S+@\S+\.\S+/.test(value)
-    }
-  }
-  
-  return plugin
-}
-```
-
-## Plugin Lifecycle Hooks
-
-- **onInit**: Called when the plugin is first added to a factory
-- **onAttach**: Called when the plugin is attached to a proxy factory, receives the factory instance
-- **onGet**: Called when a property is accessed (useful for tracking, analytics, reactive systems)
-- **beforeChange**: Called before a value changes, can prevent changes by returning `false`
-- **afterChange**: Called after a value changes
-- **onSubscribe**: Called when a subscription is created on a proxy
-- **alterSnapshot**: Called when a snapshot is created, can modify the snapshot
-- **onDispose**: Called when the factory is disposed, for cleanup
-
-### Using onAttach Hook
-
-The `onAttach` hook is particularly useful when your plugin needs to create additional proxy instances with the same plugin configuration. Here's a simple example:
-
-```typescript
-const createCachePlugin = () => {
-  let proxyFactory = null
-  const caches = new Map()
+const createSmartLogger = (): ValtioPlugin => {
+  let proxyFactory: any = null
+  const logs: any[] = []
   
   return {
-    id: 'cache',
-    name: 'Cache Plugin',
+    id: 'smart-logger',
     
-    // Store the factory reference when attached
+    // Store factory reference when attached
     onAttach: (factory) => {
       proxyFactory = factory
     },
     
-    // Plugin API methods can now use the factory
-    createCache: (name, initialData = {}) => {
-      if (!proxyFactory) {
-        throw new Error('Plugin not attached to a factory')
-      }
-      
-      // Create a new cache instance with the same plugins
-      const cache = proxyFactory(initialData)
-      caches.set(name, cache)
-      
-      return cache
+    afterChange: (path, value) => {
+      logs.push({
+        path: path.join('.'),
+        value,
+        timestamp: new Date().toISOString()
+      })
     },
     
-    getCache: (name) => caches.get(name),
+    // Plugin API methods
+    getLogs: () => [...logs],
     
-    clearCache: (name) => {
-      const cache = caches.get(name)
-      if (cache) {
-        Object.keys(cache).forEach(key => delete cache[key])
-      }
+    clearLogs: () => {
+      logs.length = 0
     },
     
-    listCaches: () => Array.from(caches.keys())
+    // Create a log viewer using the same factory
+    createLogViewer: () => {
+      if (!proxyFactory) throw new Error('Plugin not attached')
+      
+      // Create new proxy with same plugins
+      return proxyFactory({
+        logs: [],
+        filter: '',
+        refresh: () => {
+          // Access logs from main plugin
+          this.logs = [...logs]
+        }
+      })
+    }
   }
 }
-
-// Usage
-const factory = proxyInstance().use(createCachePlugin())
-
-// Create different cache instances
-const userCache = factory.cache.createCache('users', { john: { age: 30 } })
-const productCache = factory.cache.createCache('products')
-
-// All cache instances have the same plugin behavior
-userCache.jane = { age: 25 }
-productCache.laptop = { price: 999 }
 ```
-
-## API
-
-### `proxyInstance()`
-
-Creates a proxy factory with plugin support.
-
-```typescript
-const factory = proxyInstance()
-```
-
-### `factory.use(plugin | plugins[])`
-
-Registers one or more plugins with the proxy factory. Returns the factory for chaining.
-
-```typescript
-// Register a single plugin
-factory.use(loggingPlugin)
-
-// Register multiple plugins
-factory.use([loggingPlugin, validationPlugin])
-
-// Chain plugin registration
-const factory = proxyInstance()
-  .use(loggingPlugin)
-  .use(validationPlugin)
-  .use(persistPlugin)
-```
-
-### `factory(initialState)`
-
-Creates a proxy with the registered plugins.
-
-```typescript
-const store = factory({
-  count: 0,
-  user: { name: 'John' }
-})
-```
-
-### `factory.pluginId.*`
-
-Access a plugin's API directly using its ID. The plugin ID becomes a property on the factory.
-
-```typescript
-// Access plugin methods
-factory.logger.log('info', 'Custom message')
-factory.validation.validate(schema, value)
-factory.persist.save()
-
-// Access plugin configuration
-factory.validation.config.strict = true
-
-// Access nested plugin APIs
-const isValid = factory.validation.rules.email('test@example.com')
-
-// Check plugin state
-if (factory.validation.hasErrors()) {
-  console.log('Validation errors:', factory.validation.getErrors())
-}
-```
-
-### `factory.subscribe(proxyObject, callback, notifyInSync?)`
-
-Subscribes to changes on a proxy object with plugin hooks applied.
-
-```typescript
-const unsubscribe = factory.subscribe(store, (ops) => {
-  console.log('Store changed:', ops)
-})
-```
-
-### `factory.snapshot(proxyObject)`
-
-Creates a snapshot of a proxy object with plugin hooks applied.
-
-```typescript
-const snapshot = factory.snapshot(store)
-```
-
-### `factory.dispose()`
-
-Cleans up the proxy factory and all plugins. Calls `onDispose` on each plugin.
-
-```typescript
-factory.dispose()
-```
-
-## Example Plugins
 
 ### Persistence Plugin
 
 ```typescript
-const createPersistPlugin = (key) => ({
-  id: 'persist',
-  name: 'Persistence Plugin',
-  
-  onInit: () => {
-    console.log(`Loading state from ${key}`)
-  },
-  
-  afterChange: (path, value, state) => {
-    // Debounced save to localStorage
-    this.debouncedSave()
-  },
-  
-  onDispose: () => {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer)
-    }
-  },
-  
-  // Plugin API
-  save: () => {
-    const snapshot = factory.snapshot(store)
-    localStorage.setItem(key, JSON.stringify(snapshot))
-  },
-  
-  load: () => {
-    const saved = localStorage.getItem(key)
-    return saved ? JSON.parse(saved) : null
-  },
-  
-  clear: () => {
-    localStorage.removeItem(key)
-  },
-  
-  debouncedSave: () => {
-    if (this.saveTimer) clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => this.save(), 500)
-  },
-  
-  saveTimer: null
-})
-```
-
-### Reactive Plugin with onAttach
-
-```typescript
-const createReactivePlugin = () => {
-  const watchers = new Map()
-  let isBatching = false
-  const batchCallbacks = new Set()
-  let proxyFactory = null
-  
+const createPersistencePlugin = (storageKey: string): ValtioPlugin => {
   return {
-    id: 'reactive',
-    name: 'Reactive Plugin',
+    id: 'persistence',
     
-    // Store reference to the factory when attached
-    onAttach: (factory) => {
-      proxyFactory = factory
-    },
-    
-    onGet: (path, value, state) => {
-      // Track dependencies for active watchers
-      const pathKey = path.join('.')
-      for (const watcher of watchers.values()) {
-        watcher.dependencies.add(pathKey)
-      }
+    onInit: () => {
+      console.log(`💾 Persistence enabled for key: ${storageKey}`)
     },
     
     afterChange: (path, value, state) => {
-      // Trigger relevant watchers
-      const pathKey = path.join('.')
-      for (const watcher of watchers.values()) {
-        if (watcher.dependencies.has(pathKey)) {
-          if (isBatching) {
-            batchCallbacks.add(watcher.callback)
-          } else {
-            watcher.callback()
-          }
-        }
-      }
+      // Auto-save after changes
+      this.save()
     },
     
     onDispose: () => {
-      watchers.clear()
-      batchCallbacks.clear()
+      this.save() // Final save
     },
     
     // Plugin API
-    watch: (fn, callback) => {
-      const id = Symbol('watcher')
-      const watcher = {
-        fn,
-        callback: callback || fn,
-        dependencies: new Set()
-      }
-      
-      watchers.set(id, watcher)
-      fn() // Capture initial dependencies
-      
-      return () => watchers.delete(id) // unwatch
-    },
-    
-    // Create a derived store that automatically updates
-    createDerived: (deriveFn) => {
-      if (!proxyFactory) {
-        throw new Error('Plugin not attached to a factory')
-      }
-      
-      // Create a new proxy instance with the same plugins
-      const derived = proxyFactory({ value: null })
-      
-      // Watch and automatically update the derived state
-      this.watch(() => {
-        derived.value = deriveFn()
-      })
-      
-      return derived
-    },
-    
-    batch: (fn) => {
-      if (isBatching) return fn()
-      
-      isBatching = true
+    save: () => {
       try {
-        const result = fn()
-        for (const callback of batchCallbacks) {
-          callback()
-        }
-        batchCallbacks.clear()
-        return result
-      } finally {
-        isBatching = false
+        const snapshot = proxy.snapshot(state)
+        localStorage.setItem(storageKey, JSON.stringify(snapshot))
+        console.log('💾 State saved')
+      } catch (error) {
+        console.error('Save failed:', error)
       }
     },
     
-    getWatcherCount: () => watchers.size
-  }
-}
-
-// Usage example showing onAttach in action
-const factory = proxyInstance().use(createReactivePlugin())
-
-const mainStore = factory({ 
-  count: 0, 
-  name: 'John' 
-})
-
-// Plugin can now create derived stores using the same factory
-const doubledCount = factory.reactive.createDerived(() => mainStore.count * 2)
-const displayName = factory.reactive.createDerived(() => `Hello, ${mainStore.name}!`)
-
-// All stores share the same plugin configuration
-mainStore.count = 5
-console.log(doubledCount.value) // 10
-console.log(displayName.value) // "Hello, John!"
-```
-
-### DevTools Plugin
-
-```typescript
-const createDevToolsPlugin = () => ({
-  id: 'devtools',
-  name: 'DevTools Plugin',
-  
-  onInit: () => {
-    this.history = []
-    this.currentIndex = -1
-  },
-  
-  afterChange: (path, value, state) => {
-    // Capture state changes
-    const snapshot = factory.snapshot(state)
+    load: () => {
+      try {
+        const saved = localStorage.getItem(storageKey)
+        return saved ? JSON.parse(saved) : null
+      } catch (error) {
+        console.error('Load failed:', error)
+        return null
+      }
+    },
     
-    if (this.currentIndex < this.history.length - 1) {
-      this.history.splice(this.currentIndex + 1)
+    clear: () => {
+      localStorage.removeItem(storageKey)
+      console.log('💾 Storage cleared')
     }
-    
-    this.history.push({
-      snapshot,
-      operation: `${path.join('.')} = ${JSON.stringify(value)}`,
-      timestamp: Date.now()
-    })
-    
-    this.currentIndex = this.history.length - 1
-  },
-  
-  onDispose: () => {
-    this.history = []
-  },
-  
-  // Plugin API
-  undo: () => {
-    if (this.currentIndex > 0) {
-      this.currentIndex--
-      return this.history[this.currentIndex].snapshot
-    }
-    return null
-  },
-  
-  redo: () => {
-    if (this.currentIndex < this.history.length - 1) {
-      this.currentIndex++
-      return this.history[this.currentIndex].snapshot
-    }
-    return null
-  },
-  
-  getHistory: () => [...this.history],
-  
-  jumpToState: (index) => {
-    if (index >= 0 && index < this.history.length) {
-      this.currentIndex = index
-      return this.history[index].snapshot
-    }
-    return null
-  },
-  
-  history: [],
-  currentIndex: -1
-})
-```
-
-## Advanced Usage
-
-### Multiple Plugin Instances
-
-```typescript
-// Different factories can have different plugin configurations
-const debugFactory = proxyInstance()
-  .use(createLoggingPlugin({ logAccess: true }))
-  .use(createReactivePlugin())
-  .use(createDevToolsPlugin())
-
-const productionFactory = proxyInstance()
-  .use(createPersistPlugin('app-state'))
-  .use(createValidationPlugin({ strict: true }))
-
-// Each factory maintains its own plugin state
-const debugStore = debugFactory({ debug: true })
-const prodStore = productionFactory({ user: 'John' })
-```
-
-### Plugin Export Patterns
-
-Plugin authors can create clean, focused APIs:
-
-```typescript
-// reactive-store.ts
-export const createReactiveStore = () => {
-  const plugin = createReactivePlugin()
-  const factory = proxyInstance().use(plugin)
-  
-  return {
-    // Main store creator
-    store: factory,
-    
-    // Direct access to reactive methods
-    watch: plugin.watch,
-    batch: plugin.batch,
-    
-    // Utilities
-    getWatcherCount: plugin.getWatcherCount
   }
 }
 
 // Usage
-import { createReactiveStore } from 'reactive-store'
+proxy.use(createPersistencePlugin('my-app-state'))
 
-const { store, watch, batch } = createReactiveStore()
-const state = store({ count: 0 })
+const store = proxy({ count: 0, name: 'John' })
 
-const unwatch = watch(() => {
-  console.log('Count:', state.count)
-})
-
-batch(() => {
-  state.count++
-})
-```
-
-### React Integration
-
-```jsx
-import { useSnapshot } from 'valtio/react'
-import { proxyInstance } from 'valtio-plugin'
-
-const factory = proxyInstance()
-  .use(createLoggingPlugin({ logChanges: true }))
-  .use(createPersistPlugin('counter-state'))
-  .use(createReactivePlugin())
-
-const store = factory({
-  count: 0,
-  increment: () => {
-    store.count++
-  },
-  decrement: () => {
-    store.count--
-  }
-})
-
-// Load persisted state
-const savedState = factory.persist.load()
+// Auto-loads saved state
+const savedState = proxy.persistence.load()
 if (savedState) {
   Object.assign(store, savedState)
 }
 
-// Set up reactive tracking
-factory.reactive.watch(
-  () => store.count,
-  () => console.log('Count changed!')
-)
+// Changes are auto-saved
+store.count++ // Automatically persisted
+```
+
+### Validation Plugin
+
+```typescript
+const createValidationPlugin = (): ValtioPlugin => {
+  const errors = new Map<string, string[]>()
+  
+  return {
+    id: 'validation',
+    
+    beforeChange: (path, value, oldValue, state) => {
+      const pathKey = path.join('.')
+      const fieldErrors: string[] = []
+      
+      // Required validation
+      if (value == null || value === '') {
+        fieldErrors.push('Field is required')
+      }
+      
+      // String length validation
+      if (typeof value === 'string' && value.length < 2) {
+        fieldErrors.push('Must be at least 2 characters')
+      }
+      
+      // Email validation
+      if (pathKey.includes('email') && value) {
+        const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/
+        if (!emailRegex.test(value)) {
+          fieldErrors.push('Invalid email format')
+        }
+      }
+      
+      if (fieldErrors.length > 0) {
+        errors.set(pathKey, fieldErrors)
+        console.log(`❌ Validation failed for ${pathKey}:`, fieldErrors)
+        return false // Prevent change
+      }
+      
+      errors.delete(pathKey)
+      return true
+    },
+    
+    // Plugin API
+    getErrors: () => Object.fromEntries(errors),
+    
+    hasErrors: () => errors.size > 0,
+    
+    clearErrors: () => {
+      errors.clear()
+    },
+    
+    validateField: (path: string, value: any) => {
+      // Manual validation
+      return !this.getErrors()[path]
+    }
+  }
+}
+```
+
+## 🔄 Method Chaining
+
+Chain plugin registrations and method calls:
+
+```typescript
+import { proxy } from 'valtio'
+
+// Chain plugin registration
+proxy
+  .use(loggingPlugin)
+  .use(validationPlugin)
+  .use(persistencePlugin)
+
+// Method chaining returns the proxy for fluent API
+const result = proxy
+  .use(analyticsPlugin)
+  .use(debugPlugin)
+
+// Access chained plugin methods
+result.analytics.track('app_loaded')
+result.debug.enable()
+```
+
+## 🏭 Factory Pattern
+
+Create reusable factory configurations:
+
+```typescript
+// Create configured factories
+const createDebugFactory = () => {
+  return proxy.createInstance()
+    .use(createLoggingPlugin({ debug: true }))
+    .use(createValidationPlugin())
+    .use(createAnalyticsPlugin({ debug: true }))
+}
+
+const createProductionFactory = () => {
+  return proxy.createInstance()
+    .use(createPersistencePlugin('prod-state'))
+    .use(createValidationPlugin())
+    .use(createAnalyticsPlugin({ debug: false }))
+}
+
+// Use in different environments
+const factory = process.env.NODE_ENV === 'development' 
+  ? createDebugFactory()
+  : createProductionFactory()
+
+const store = factory({ user: null, settings: {} })
+```
+
+## ⚛️ React Integration
+
+Perfect integration with Valtio's React hooks:
+
+```jsx
+import { useSnapshot } from 'valtio/react'
+import { proxy } from 'valtio'
+import 'valtio-plugin'
+
+// Set up global plugins
+proxy.use(createLoggingPlugin())
+proxy.use(createPersistencePlugin('app-state'))
+
+const store = proxy({
+  count: 0,
+  increment: () => store.count++,
+  decrement: () => store.count--,
+  reset: () => store.count = 0
+})
+
+// Load persisted state
+const saved = proxy.persistence.load()
+if (saved) Object.assign(store, saved)
 
 function Counter() {
   const snap = useSnapshot(store)
@@ -641,150 +484,201 @@ function Counter() {
       <p>Count: {snap.count}</p>
       <button onClick={snap.increment}>+</button>
       <button onClick={snap.decrement}>-</button>
-      <button onClick={() => factory.persist.clear()}>
-        Clear Saved State
+      <button onClick={snap.reset}>Reset</button>
+      <button onClick={() => proxy.persistence.clear()}>
+        Clear Storage
       </button>
-      <p>Active watchers: {factory.reactive.getWatcherCount()}</p>
     </div>
   )
 }
 ```
 
-## Plugin Best Practices
+## 📚 API Reference
 
-### 1. Use Descriptive IDs
+### Global Proxy Methods
+
+These methods are available on the global `proxy` import from 'valtio':
 
 ```typescript
-// Good
-{ id: 'validation', ... }
-{ id: 'persist', ... }
-{ id: 'devtools', ... }
+import { proxy } from 'valtio'
+import 'valtio-plugin'
 
-// Avoid
-{ id: 'plugin1', ... }
-{ id: 'myPlugin', ... }
+// Plugin management
+proxy.use(plugin | plugins[])     // Register global plugins
+proxy.clearPlugins()              // Clear all global plugins  
+proxy.getPlugins()               // Get readonly plugin list
+proxy.removePlugin(id)           // Remove specific plugin
+
+// Instance creation
+proxy.createInstance()           // Create new factory instance
+
+// Standard Valtio methods (enhanced with plugin hooks)
+proxy.subscribe(obj, callback)   // Subscribe with plugin hooks
+proxy.snapshot(obj)             // Snapshot with plugin hooks
+
+// Plugin access
+proxy[pluginId]                 // Access plugin by ID
 ```
 
-### 2. Organize API Methods Logically
+### Instance Factory Methods
+
+Created via `proxy.createInstance()`:
 
 ```typescript
-const plugin = {
-  id: 'analytics',
+const instance = proxy.createInstance()
+
+// Plugin management
+instance.use(plugin | plugins[]) // Register instance plugins
+instance.dispose()              // Clean up and dispose
+
+// Proxy creation
+instance(initialState)          // Create proxy with plugins
+
+// Enhanced methods
+instance.subscribe(obj, cb)     // Subscribe with hooks
+instance.snapshot(obj)         // Snapshot with hooks
+
+// Plugin access
+instance[pluginId]             // Access plugin by ID
+```
+
+### ValtioPlugin Interface
+
+```typescript
+interface ValtioPlugin {
+  id: string                    // Required: unique identifier
+  name?: string                // Optional: display name
   
-  // Core methods
-  track: (event, data) => { /* ... */ },
-  identify: (userId) => { /* ... */ },
+  // Lifecycle hooks (all optional)
+  onInit?: () => void
+  onAttach?: (factory) => void
+  beforeChange?: (path, newValue, oldValue, state) => boolean | undefined
+  afterChange?: (path, newValue, state) => void
+  onSubscribe?: (proxyObject, callback) => void
+  alterSnapshot?: (snapshot) => Record<string, unknown>
+  onDispose?: () => void
   
-  // Configuration
-  config: {
-    debug: false,
-    endpoint: 'https://api.example.com'
-  },
-  
-  // Utilities
-  utils: {
-    sanitize: (data) => { /* ... */ },
-    validate: (event) => { /* ... */ }
-  }
+  // Custom properties (plugin API)
+  [key: string]: unknown
 }
 ```
 
-### 3. Handle Errors Gracefully
+## 🎨 Plugin Development Guide
+
+### Plugin Structure
 
 ```typescript
-const plugin = {
-  id: 'myPlugin',
+const createMyPlugin = (options = {}) => {
+  // Private state
+  let pluginState = {}
   
-  beforeChange: (path, value, prevValue, state) => {
-    try {
-      return this.validateValue(value)
-    } catch (error) {
-      console.error('Plugin validation error:', error)
-      return true // Allow change on error to avoid breaking the app
+  return {
+    id: 'my-plugin',
+    name: 'My Awesome Plugin',
+    
+    // Lifecycle hooks
+    onInit: () => {
+      // Initialize plugin
+    },
+    
+    onAttach: (factory) => {
+      // Store factory reference if needed
+    },
+    
+    beforeChange: (path, value, oldValue, state) => {
+      // Validate or transform changes
+      return true // or false to prevent
+    },
+    
+    afterChange: (path, value, state) => {
+      // React to changes
+    },
+    
+    onDispose: () => {
+      // Cleanup resources
+    },
+    
+    // Public API methods
+    publicMethod: () => {
+      // Plugin functionality
+    },
+    
+    // Configuration
+    config: {
+      ...options
+    },
+    
+    // Nested APIs
+    api: {
+      subMethod: () => {}
     }
-  },
-  
-  onDispose: () => {
-    try {
-      this.cleanup()
-    } catch (error) {
-      console.error('Plugin cleanup error:', error)
-    }
   }
 }
 ```
 
-### 4. Provide Configuration Options
+### Best Practices
+
+1. **Use descriptive IDs**: `'logger'`, `'validation'`, `'persistence'`
+2. **Handle errors gracefully**: Don't break the app if plugin fails
+3. **Provide configuration**: Make plugins customizable
+4. **Use onDispose**: Clean up timers, subscriptions, etc.
+5. **Type your plugins**: Export TypeScript interfaces
+6. **Document your API**: Clear method names and documentation
+
+### Publishing Plugins
 
 ```typescript
-const createPlugin = (options = {}) => ({
-  id: 'configurable',
-  
-  config: {
-    enabled: options.enabled ?? true,
-    level: options.level ?? 'info',
-    ...options
-  },
-  
-  updateConfig: (newOptions) => {
-    Object.assign(this.config, newOptions)
-  }
-})
-```
+// my-valtio-plugin/index.ts
+import { ValtioPlugin } from 'valtio-plugin'
 
-### 5. Use onDispose for Cleanup
-
-```typescript
-const plugin = {
-  id: 'timer',
-  
-  onInit: () => {
-    this.interval = setInterval(() => {
-      console.log('Timer tick')
-    }, 1000)
-  },
-  
-  onDispose: () => {
-    if (this.interval) {
-      clearInterval(this.interval)
-    }
-  }
-}
-```
-
-## Performance Considerations
-
-- **onGet hooks** can be called frequently - keep them lightweight
-- **Use batching** when making multiple related changes
-- **Dispose factories** when no longer needed to prevent memory leaks
-- **Plugin instances are isolated** - different factories don't interfere with each other
-
-## TypeScript Support
-
-The plugin system is fully typed. You can define the type of your state and get full IntelliSense:
-
-```typescript
-interface UserState {
-  name: string
-  age: number
-  isActive: boolean
+export interface MyPluginAPI extends ValtioPlugin {
+  doSomething: () => void
+  config: { enabled: boolean }
 }
 
-const userStore = factory<UserState>({
-  name: '',
-  age: 0,
-  isActive: false
-})
+export const createMyPlugin = (options = {}): MyPluginAPI => {
+  return {
+    id: 'my-plugin',
+    doSomething: () => console.log('Hello!'),
+    config: { enabled: true, ...options }
+  }
+}
 
-// TypeScript will enforce the interface
-userStore.name = 'John' // ✅ Valid
-userStore.age = '25' // ❌ Type error
+// Usage by consumers
+import { proxy } from 'valtio'
+import { createMyPlugin } from 'my-valtio-plugin'
+
+proxy.use(createMyPlugin({ enabled: true }))
 ```
 
-## License
+## 🚀 Examples
+
+Check out the [`examples/`](./examples) directory for:
+
+- **`logging-example.js`** - Working JavaScript example
+- **`typescript-example.ts`** - TypeScript with full autocomplete
+- **`autocomplete-demo.ts`** - Interactive demo for testing TypeScript support
+
+```bash
+# Run examples
+node examples/logging-example.js
+npx tsx examples/typescript-example.ts
+```
+
+## 🔧 Installation
+
+```bash
+npm install valtio valtio-plugin
+```
+
+## 📄 License
 
 MIT
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions welcome! Please read our contributing guidelines and submit pull requests to improve the plugin system.
+
+---
+
+**Ready to extend Valtio?** Start with the examples and build your first plugin! 🚀
