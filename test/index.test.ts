@@ -11,7 +11,7 @@ interface HookSpies {
   beforeChange?: ReturnType<typeof vi.fn>;
   afterChange?: ReturnType<typeof vi.fn>;
   onSubscribe?: ReturnType<typeof vi.fn>;
-  alterSnapshot?: ReturnType<typeof vi.fn>;
+  onSnapshot?: ReturnType<typeof vi.fn>;
   onDispose?: ReturnType<typeof vi.fn>;
   [key: string]: ReturnType<typeof vi.fn> | undefined;
 }
@@ -33,7 +33,7 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
     beforeChange: hookSpies.beforeChange || vi.fn().mockReturnValue(true),
     afterChange: hookSpies.afterChange || vi.fn(),
     onSubscribe: hookSpies.onSubscribe || vi.fn(),
-    alterSnapshot: hookSpies.alterSnapshot || vi.fn(snapshot => snapshot),
+    onSnapshot: hookSpies.onSnapshot || vi.fn(),
     onDispose: hookSpies.onDispose || vi.fn(),
   };
   
@@ -47,7 +47,7 @@ function createTestPlugin(id = 'test-plugin', hookSpies: HookSpies = {}) {
     beforeChange: spies.beforeChange,
     afterChange: spies.afterChange,
     onSubscribe: spies.onSubscribe,
-    alterSnapshot: spies.alterSnapshot,
+    onSnapshot: spies.onSnapshot,
     onDispose: spies.onDispose,
     
     // Plugin API methods directly on plugin object
@@ -360,10 +360,10 @@ describe('Valtio Plugin System', () => {
       unsubscribe();
     });
     
-    it('should call alterSnapshot when creating a snapshot', () => {
+    it('should call onSnapshot when creating a snapshot', () => {
       const snap = instance.snapshot(store);
       
-      expect(testPlugin.alterSnapshot).toHaveBeenCalledWith(
+      expect(testPlugin.onSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ count: 0 })
       );
     });
@@ -597,52 +597,50 @@ describe('Valtio Plugin System', () => {
   
   describe('proxy.snapshot() and instance.snapshot()', () => {
     it('should work with global plugin hooks', () => {
-      // Create a plugin that modifies snapshots
-      const modifierPlugin = createTestPlugin('modifier-plugin', {
-        alterSnapshot: vi.fn((snap) => ({
-          ...snap,
-          _modified: true
-        }))
+      // Create a plugin that observes snapshots
+      const observerPlugin = createTestPlugin('observer-plugin', {
+        onSnapshot: vi.fn()
       });
       
-      proxy.use(modifierPlugin);
+      proxy.use(observerPlugin);
       
       const store = proxy({ count: 0 });
       const snap = proxy.snapshot(store);
       
       // Plugin hook should be called
-      expect(modifierPlugin.alterSnapshot).toHaveBeenCalled();
+      expect(observerPlugin.onSnapshot).toHaveBeenCalled();
+      expect(observerPlugin.onSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ count: 0 })
+      );
       
-      // Snapshot should be modified
+      // Snapshot should remain unmodified
       expect(snap).toEqual({
-        count: 0,
-        _modified: true
+        count: 0
       });
     });
     
     it('should work with instance plugin hooks', () => {
       const instance = proxy.createInstance();
       
-      // Create a plugin that modifies snapshots
-      const modifierPlugin = createTestPlugin('modifier-plugin', {
-        alterSnapshot: vi.fn((snap) => ({
-          ...snap,
-          _modified: true
-        }))
+      // Create a plugin that observes snapshots
+      const observerPlugin = createTestPlugin('observer-plugin', {
+        onSnapshot: vi.fn()
       });
       
-      instance.use(modifierPlugin);
+      instance.use(observerPlugin);
       
       const store = instance({ count: 0 });
       const snap = instance.snapshot(store);
       
       // Plugin hook should be called
-      expect(modifierPlugin.alterSnapshot).toHaveBeenCalled();
+      expect(observerPlugin.onSnapshot).toHaveBeenCalled();
+      expect(observerPlugin.onSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ count: 0 })
+      );
       
-      // Snapshot should be modified
+      // Snapshot should remain unmodified
       expect(snap).toEqual({
-        count: 0,
-        _modified: true
+        count: 0
       });
     });
     
@@ -651,7 +649,7 @@ describe('Valtio Plugin System', () => {
       
       // Create a plugin with a hook that throws an error
       const errorPlugin = createTestPlugin('error-plugin', {
-        alterSnapshot: vi.fn().mockImplementation(() => {
+        onSnapshot: vi.fn().mockImplementation(() => {
           throw new Error('Test error');
         })
       });

@@ -216,11 +216,11 @@ const enhanceProxyFunction = () => {
         if (isObject(proxyObject)) {
           const applicablePlugins = getApplicablePlugins(proxyObject)
           for (const plugin of applicablePlugins) {
-            if (plugin.alterSnapshot) {
+            if (plugin.onSnapshot) {
               try {
-                snap = plugin.alterSnapshot(snap)
+                plugin.onSnapshot(snap)
               } catch (e) {
-                console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+                console.error(`Error in plugin ${plugin.id} onSnapshot:`, e)
               }
             }
           }
@@ -752,11 +752,11 @@ function createProxyInstance(): ProxyFactory {
           const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
           if (instanceId === registry.id) {
             for(const plugin of registry.plugins) {
-              if (plugin.alterSnapshot) {
+              if (plugin.onSnapshot) {
                 try {
-                  snap = plugin.alterSnapshot(snap)
+                  plugin.onSnapshot(snap)
                 } catch (e) {
-                  console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+                  console.error(`Error in plugin ${plugin.id} onSnapshot:`, e)
                 }
               }
             }
@@ -890,14 +890,14 @@ const augmentValtioProxy = () => {
     value: <T extends object>(proxyObject: T): Snapshot<T> => {
       let snap = originalSnapshot(proxyObject) as Record<string, unknown>
       
-      // Apply alterSnapshot hooks from applicable plugins
+      // Apply onSnapshot hooks from applicable plugins
       const applicablePlugins = getApplicablePlugins(proxyObject)
       for (const plugin of applicablePlugins) {
-        if (plugin.alterSnapshot) {
+        if (plugin.onSnapshot) {
           try {
-            snap = plugin.alterSnapshot(snap)
+            plugin.onSnapshot(snap)
           } catch (e) {
-            console.error(`Error in plugin ${plugin.id} alterSnapshot:`, e)
+            console.error(`Error in plugin ${plugin.id} onSnapshot:`, e)
           }
         }
       }

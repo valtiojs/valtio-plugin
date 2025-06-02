@@ -92,8 +92,5 @@
     "valtio": {
       "optional": false
     }
-  },
-  "dependencies": {
-    "proxy-compare": "^3.0.1"
   }
 }
