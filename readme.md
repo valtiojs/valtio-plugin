@@ -178,9 +178,9 @@ const comprehensivePlugin: ValtioPlugin = {
     console.log('New subscription created')
   },
   
-  // Called when creating snapshots (can modify the snapshot)
-  alterSnapshot: (snapshot) => {
-    return { ...snapshot, _timestamp: Date.now() }
+  // Called when creating snapshots
+  onSnapshot: (snapshot) => {
+    console.log('Snapshot created')
   },
   
   // Called when factory is disposed
@@ -555,7 +555,7 @@ interface ValtioPlugin {
   beforeChange?: (path, newValue, oldValue, state) => boolean | undefined
   afterChange?: (path, newValue, state) => void
   onSubscribe?: (proxyObject, callback) => void
-  alterSnapshot?: (snapshot) => Record<string, unknown>
+  onSnapshot?: (snapshot) => void
   onDispose?: () => void
   
   // Custom properties (plugin API)
@@ -602,16 +602,7 @@ const createMyPlugin = (options = {}) => {
     publicMethod: () => {
       // Plugin functionality
     },
-    
-    // Configuration
-    config: {
-      ...options
-    },
-    
-    // Nested APIs
-    api: {
-      subMethod: () => {}
-    }
+
   }
 }
 ```

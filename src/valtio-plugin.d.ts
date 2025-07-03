@@ -18,8 +18,8 @@ export interface ValtioPlugin {
   // Path-specific handlers
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
   
-  // Snapshot modification
-  alterSnapshot?: (snapshot: Record<string, unknown>) => Record<string, unknown>
+  // Snapshot observation
+  onSnapshot?: (snapshot: Record<string, unknown>) => void
 
   // Plugin authors should be able to add whatever they want here
   [key: string]: unknown

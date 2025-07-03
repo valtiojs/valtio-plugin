@@ -170,7 +170,7 @@ describe('Integration Tests', () => {
       const testPlugin = {
         id: 'test-plugin',
         name: 'Test Plugin',
-        alterSnapshot: vi.fn(snapshot => snapshot),
+        onSnapshot: vi.fn(snapshot => snapshot),
       };
       
       const instance = proxy.createInstance();
