@@ -6,7 +6,7 @@ import {
   Snapshot,
   unstable_getInternalStates,
   unstable_replaceInternalFunction,
-} from 'valtio'
+} from 'valtio/vanilla'
 
 // Import types from the separate augmentation file
 import type { ValtioPlugin, ProxyFactory, EnhancedGlobalProxy } from './valtio-plugin'
