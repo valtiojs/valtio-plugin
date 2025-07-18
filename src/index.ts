@@ -76,8 +76,10 @@ const isObject = (x: unknown): x is object =>
 
 interface InstanceRegistry {
   id: string
+  parentId?: string // Track parent instance for nested instances
   plugins: ValtioPlugin[]
   isDisposed: boolean
+  children: Set<string> // Track child instance IDs
 }
 
 // Global plugin registry for enhanced proxy
@@ -125,7 +127,7 @@ const addMetaData = (obj: object, meta: {
   }
 }
 
-// Helper to get all applicable plugins for a proxy
+// Helper to get all applicable plugins for a proxy (including inherited from parent instances)
 const getApplicablePlugins = (obj: object): ValtioPlugin[] => {
   const plugins: ValtioPlugin[] = []
   
@@ -135,9 +137,24 @@ const getApplicablePlugins = (obj: object): ValtioPlugin[] => {
   // Add instance-specific plugins if this is an instance proxy
   if (hasInstanceId(obj)) {
     const instanceId = obj[INSTANCE_ID_SYMBOL]
-    const registry = instanceId ? instanceRegistry.get(instanceId) : undefined
-    if (registry && !registry.isDisposed) {
-      plugins.push(...registry.plugins)
+    
+    // Walk up the instance hierarchy to collect inherited plugins
+    const hierarchy: string[] = []
+    let currentInstanceId: string | undefined = instanceId
+    
+    while (currentInstanceId) {
+      hierarchy.unshift(currentInstanceId)
+      const registry = instanceRegistry.get(currentInstanceId)
+      if (!registry) break
+      currentInstanceId = registry.parentId
+    }
+    
+    // Add plugins from parent to child (parent plugins run before child plugins)
+    for (const id of hierarchy) {
+      const registry = instanceRegistry.get(id)
+      if (registry && !registry.isDisposed) {
+        plugins.push(...registry.plugins)
+      }
     }
   }
   
@@ -610,18 +627,63 @@ const initializePluginSystem = () => {
   })
 }
 
-function createProxyInstance(): ProxyFactory {
+// Helper to dispose an instance and all its children
+const disposeInstanceRecursively = (instanceId: string): void => {
+  const registry = instanceRegistry.get(instanceId)
+  if (!registry || registry.isDisposed) return
+
+  // Dispose all children first
+  for (const childId of registry.children) {
+    disposeInstanceRecursively(childId)
+  }
+
+  // Remove from parent's children set
+  if (registry.parentId) {
+    const parentRegistry = instanceRegistry.get(registry.parentId)
+    if (parentRegistry) {
+      parentRegistry.children.delete(instanceId)
+    }
+  }
+
+  // Dispose plugins
+  for (const plugin of registry.plugins) {
+    if (plugin.onDispose) {
+      try {
+        plugin.onDispose()
+      } catch (e) {
+        console.error(`Error disposing plugin ${plugin.id}:`, e)
+      }
+    }
+  }
+
+  // Mark as disposed and remove from registry
+  registry.isDisposed = true
+  registry.children.clear()
+  instanceRegistry.delete(instanceId)
+}
+
+function createProxyInstance(parentInstanceId?: string): ProxyFactory {
   initializePluginSystem()
 
   const instanceId = createInstanceId()
 
   const registry: InstanceRegistry = {
     id: instanceId,
+    parentId: parentInstanceId,
     plugins: [],
-    isDisposed: false
+    isDisposed: false,
+    children: new Set()
   }
 
   instanceRegistry.set(instanceId, registry)
+
+  // If this is a child instance, register with parent
+  if (parentInstanceId) {
+    const parentRegistry = instanceRegistry.get(parentInstanceId)
+    if (parentRegistry) {
+      parentRegistry.children.add(instanceId)
+    }
+  }
 
   const createProxy = <T extends object>(initialState: T): T => {
     if (registry.isDisposed) {
@@ -635,8 +697,9 @@ function createProxyInstance(): ProxyFactory {
     const meta = { rootProxy: valtioProxyInstance, instanceId, path: []}
     addMetaData(valtioProxyInstance, meta)
 
-    // Call plugin initialization hooks for instance plugins
-    for(const plugin of registry.plugins) {
+    // Call plugin initialization hooks for all applicable plugins (including inherited)
+    const applicablePlugins = getApplicablePlugins(valtioProxyInstance)
+    for(const plugin of applicablePlugins) {
       if (plugin.onInit) {
         try {
           plugin.onInit()
@@ -653,13 +716,14 @@ function createProxyInstance(): ProxyFactory {
   const proxyFn = new Proxy(createProxy, {
     get(target, prop) {
       // First check if it's one of our methods
-      if (prop === 'use' || prop === 'subscribe' || prop === 'snapshot' || prop === 'dispose') {
+      if (prop === 'use' || prop === 'subscribe' || prop === 'snapshot' || prop === 'dispose' || prop === 'createInstance') {
         return Reflect.get(target, prop)
       }
 
-      // Check if it's a plugin
+      // Check if it's a plugin (including inherited ones)
       if (typeof prop === 'string') {
-        const plugin = registry.plugins.find(p => p.id === prop)
+        const applicablePlugins = getApplicablePlugins({ [INSTANCE_ID_SYMBOL]: instanceId } as EnhancedProxy)
+        const plugin = applicablePlugins.find(p => p.id === prop)
         if (plugin) {
           return plugin // Return the whole plugin object
         }
@@ -706,6 +770,19 @@ function createProxyInstance(): ProxyFactory {
       configurable: true,
     },
 
+    createInstance: {
+      value: (): ProxyFactory => {
+        if (registry.isDisposed) {
+          throw new Error('This instance has been disposed')
+        }
+        
+        // Create a child instance with this instance as parent
+        return createProxyInstance(instanceId)
+      },
+      enumerable: true,
+      configurable: true,
+    },
+
     subscribe: {
       value: <T extends object>(
         proxyObject: T,
@@ -716,12 +793,21 @@ function createProxyInstance(): ProxyFactory {
           throw new Error('This instance has been disposed')
         }
         
-        // Check if this proxy belongs to this instance
+        // Check if this proxy belongs to this instance hierarchy
         if (isObject(proxyObject) && hasInstanceId(proxyObject)) {
-          const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
-          if (instanceId === registry.id) {
-            // Run onSubscribe hooks
-            registry.plugins.forEach(plugin => {
+          const proxyInstanceId = proxyObject[INSTANCE_ID_SYMBOL]
+          
+          // Check if this proxy belongs to this instance or any of its descendants
+          const isFromThisHierarchy = (checkId: string): boolean => {
+            if (checkId === instanceId) return true
+            const checkRegistry = instanceRegistry.get(checkId)
+            return checkRegistry?.parentId ? isFromThisHierarchy(checkRegistry.parentId) : false
+          }
+          
+          if (proxyInstanceId && isFromThisHierarchy(proxyInstanceId)) {
+            // Run onSubscribe hooks for applicable plugins
+            const applicablePlugins = getApplicablePlugins(proxyObject)
+            for (const plugin of applicablePlugins) {
               if (plugin.onSubscribe) {
                 try {
                   plugin.onSubscribe(proxyObject, callback)
@@ -729,7 +815,7 @@ function createProxyInstance(): ProxyFactory {
                   console.error(`Error in plugin ${plugin.id} onSubscribe:`, e)
                 }
               }
-            })
+            }
           }
         }
         
@@ -749,9 +835,18 @@ function createProxyInstance(): ProxyFactory {
         let snap: Record<string, unknown> = originalSnapshot(proxyObject) as Record<string, unknown>
         
         if (isObject(proxyObject) && hasInstanceId(proxyObject)) {
-          const instanceId = proxyObject[INSTANCE_ID_SYMBOL]
-          if (instanceId === registry.id) {
-            for(const plugin of registry.plugins) {
+          const proxyInstanceId = proxyObject[INSTANCE_ID_SYMBOL]
+          
+          // Check if this proxy belongs to this instance hierarchy
+          const isFromThisHierarchy = (checkId: string): boolean => {
+            if (checkId === instanceId) return true
+            const checkRegistry = instanceRegistry.get(checkId)
+            return checkRegistry?.parentId ? isFromThisHierarchy(checkRegistry.parentId) : false
+          }
+          
+          if (proxyInstanceId && isFromThisHierarchy(proxyInstanceId)) {
+            const applicablePlugins = getApplicablePlugins(proxyObject)
+            for(const plugin of applicablePlugins) {
               if (plugin.onSnapshot) {
                 try {
                   plugin.onSnapshot(snap)
@@ -772,23 +867,10 @@ function createProxyInstance(): ProxyFactory {
 
     dispose: {
       value: () => {
-        if (registry.isDisposed) return
-        
-        // Give plugins a chance to clean up
-        for (const plugin of registry.plugins) {
-          if (plugin.onDispose) {
-            try {
-              plugin.onDispose()
-            } catch (e) {
-              console.error(`Error disposing plugin ${plugin.id}:`, e)
-            }
-          }
-        }
-        
-        registry.isDisposed = true
-        registry.plugins.length = 0
-        instanceRegistry.delete(instanceId)
-      }
+        disposeInstanceRecursively(instanceId)
+      },
+      enumerable: true,
+      configurable: true,
     }
   })
 
