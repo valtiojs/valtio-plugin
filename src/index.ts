@@ -391,7 +391,7 @@ const initializePluginSystem = () => {
           return Reflect.get(target, prop, receiver)
         }
         
-        const result = originalGet
+        let result = originalGet
           ? originalGet(target, prop, receiver)
           : Reflect.get(target, prop, receiver)
 
@@ -438,11 +438,11 @@ const initializePluginSystem = () => {
           for (const plugin of applicablePlugins) {
             if (plugin.onGet) {
               try {
-                plugin.onGet(
-                  fullPath.map(String),
-                  result,
-                  rootProxy
-                )
+                const customValue = plugin.onGet(fullPath.map(String), result, rootProxy)
+
+                if (customValue !== undefined) {
+                  result = customValue
+                }
               } catch (e) {
                 console.error(`Error in plugin {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in onGet: `, e)
               }

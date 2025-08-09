@@ -12,7 +12,7 @@ export interface ValtioPlugin {
   beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
-  onGet?: (path: string[], value: unknown, state: object) => void
+  onGet?: (path: string[], value: unknown, state: object) => unknown | void
   onDispose?: () => void
   
   // Path-specific handlers
