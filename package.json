@@ -1,7 +1,7 @@
 {
   "name": "valtio-plugin",
   "description": "Valtio state management plugin system",
-  "version": "1.9.0",
+  "version": "1.10.1",
   "type": "module",
   "author": "Michael Sweeeney <overthemike@gmail.com>",
   "repository": {
