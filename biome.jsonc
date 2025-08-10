@@ -1,7 +1,34 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.4.1/schema.json",
-  "organizeImports": {
-    "enabled": true
+  "root": true,
+  "$schema": "https://biomejs.dev/schemas/2.1.4/schema.json",
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": false,
+    "indentStyle": "tab",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "includes": [
+      "**",
+      "!**/.turbo/**",
+      "!**/.vscode/**",
+      "!**/dist/**",
+      "!**/node_modules/**",
+      "!**/.git/**"
+    ]
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "asNeeded",
+      "quoteStyle": "double",
+      "trailingCommas": "all"
+    }
   },
   "linter": {
     "enabled": true,
@@ -10,12 +37,21 @@
       "suspicious": {
         "noExplicitAny": "error"
       }
-    }
+    },
+    "includes": [
+      "**",
+      "!**/tests/**",
+      "!**/.turbo",
+      "!**/.vscode/**",
+      "!**/dist/**",
+      "!**/node_modules/**",
+      "!**/.git/**"
+    ]
   },
   "overrides": [
     {
-      "include": [
-        "tests/**",
+      "includes": [
+        "**/tests/**",
         "**/*.bench.ts",
         "**/*.test.ts",
         "**/*.spec.ts",
@@ -29,10 +65,5 @@
         }
       }
     }
-  ],
-  "javascript": {
-    "formatter": {
-      "semicolons": "asNeeded"
-    }
-  }
+  ]
 }
