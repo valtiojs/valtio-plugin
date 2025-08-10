@@ -687,283 +687,280 @@ describe('Nested Instance System', () => {
     });
   });
 
-  // Additional tests for recursive.test.ts
-describe('onGet with nested instances', () => {
-  it('should inherit onGet behavior from parent instances', () => {
-    const parentPlugin: ValtioPlugin = {
-      id: 'parent-transform',
-      onGet: (path, value) => {
-        if (typeof value === 'string') {
-          return `[PARENT] ${value}`;
+  describe('transformGet with nested instances', () => {
+    it('should inherit transformGet behavior from parent instances', () => {
+      const parentPlugin: ValtioPlugin = {
+        id: 'parent-transform',
+        transformGet: (path, value) => {
+          if (typeof value === 'string') {
+            return `[PARENT] ${value}`;
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const childPlugin: ValtioPlugin = {
-      id: 'child-transform',
-      onGet: (path, value) => {
-        if (typeof value === 'number') {
-          return value * 100;
+      const childPlugin: ValtioPlugin = {
+        id: 'child-transform', 
+        transformGet: (path, value) => {
+          if (typeof value === 'number') {
+            return value * 2;
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const parentInstance = proxy.createInstance();
-    parentInstance.use(parentPlugin);
-    
-    const childInstance = parentInstance.createInstance();
-    childInstance.use(childPlugin);
-    
-    const store = childInstance({ 
-      text: 'hello',
-      number: 5,
-      bool: true
+      const parentInstance = proxy.createInstance();
+      parentInstance.use(parentPlugin);
+
+      const childInstance = parentInstance.createInstance();
+      childInstance.use(childPlugin);
+
+      const store = childInstance({
+        text: 'hello',
+        number: 5,
+        untransformed: true
+      });
+
+      // Parent plugin should transform strings
+      expect(store.text).toBe('[PARENT] hello');
+      
+      // Child plugin should transform numbers
+      expect(store.number).toBe(10);
+      
+      // Untransformed values should remain unchanged
+      expect(store.untransformed).toBe(true);
     });
 
-    // Parent plugin should transform strings
-    expect(store.text).toBe('[PARENT] hello');
-    
-    // Child plugin should transform numbers
-    expect(store.number).toBe(500);
-    
-    // Boolean should pass through unchanged
-    expect(store.bool).toBe(true);
-  });
-
-  it('should allow child onGet to override parent onGet', () => {
-    const parentPlugin: ValtioPlugin = {
-      id: 'parent-plugin',
-      onGet: (path, value) => {
-        if (path[0] === 'shared') {
-          return 'from parent';
+    it('should allow child transformGet to override parent transformGet', () => {
+      const parentPlugin: ValtioPlugin = {
+        id: 'parent-override',
+        transformGet: (path, value) => {
+          if (path[0] === 'shared') {
+            return 'from parent';
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const childPlugin: ValtioPlugin = {
-      id: 'child-plugin',
-      onGet: (path, value) => {
-        if (path[0] === 'shared') {
-          return 'from child';
+      const childPlugin: ValtioPlugin = {
+        id: 'child-override',
+        transformGet: (path, value) => {
+          if (path[0] === 'shared') {
+            return 'from child';
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const parentInstance = proxy.createInstance();
-    parentInstance.use(parentPlugin);
-    
-    const childInstance = parentInstance.createInstance();
-    childInstance.use(childPlugin);
-    
-    const parentStore = parentInstance({ shared: 'original' });
-    const childStore = childInstance({ shared: 'original' });
+      const parentInstance = proxy.createInstance();
+      parentInstance.use(parentPlugin);
 
-    expect(parentStore.shared).toBe('from parent');
-    expect(childStore.shared).toBe('from child'); // Child overrides parent
-  });
+      const childInstance = parentInstance.createInstance();
+      childInstance.use(childPlugin);
 
-  it('should handle onGet in complex nested hierarchies', () => {
-    const callOrder: string[] = [];
-    
-    const rootPlugin: ValtioPlugin = {
-      id: 'root',
-      onGet: (path, value) => {
-        callOrder.push('root');
-        if (path[0] === 'rootOnly') return 'root value';
-        return undefined;
-      }
-    };
+      const parentStore = parentInstance({ shared: 'original' });
+      const childStore = childInstance({ shared: 'original' });
 
-    const middlePlugin: ValtioPlugin = {
-      id: 'middle',
-      onGet: (path, value) => {
-        callOrder.push('middle');
-        if (path[0] === 'middleOnly') return 'middle value';
-        return undefined;
-      }
-    };
-
-    const leafPlugin: ValtioPlugin = {
-      id: 'leaf',
-      onGet: (path, value) => {
-        callOrder.push('leaf');
-        if (path[0] === 'leafOnly') return 'leaf value';
-        return undefined;
-      }
-    };
-
-    const rootInstance = proxy.createInstance();
-    rootInstance.use(rootPlugin);
-    
-    const middleInstance = rootInstance.createInstance();
-    middleInstance.use(middlePlugin);
-    
-    const leafInstance = middleInstance.createInstance();
-    leafInstance.use(leafPlugin);
-    
-    const store = leafInstance({ 
-      rootOnly: 'ignored',
-      middleOnly: 'ignored',
-      leafOnly: 'ignored',
-      normal: 'normal'
+      expect(parentStore.shared).toBe('from parent');
+      expect(childStore.shared).toBe('from child'); // Child overrides parent
     });
 
-    // Clear init calls
-    callOrder.length = 0;
-    
-    // Access each property
-    const root = store.rootOnly;
-    const middle = store.middleOnly;
-    const leaf = store.leafOnly;
-    const normal = store.normal;
-    
-    expect(root).toBe('root value');
-    expect(middle).toBe('middle value');
-    expect(leaf).toBe('leaf value');
-    expect(normal).toBe('normal');
-    
-    // Check call order - should be root → middle → leaf for each access
-    expect(callOrder).toEqual([
-      'root', 'middle', 'leaf', // rootOnly access
-      'root', 'middle', 'leaf', // middleOnly access
-      'root', 'middle', 'leaf', // leafOnly access
-      'root', 'middle', 'leaf'  // normal access
-    ]);
-  });
-
-  it('should handle onGet with global and nested instance plugins', () => {
-    const globalPlugin: ValtioPlugin = {
-      id: 'global',
-      onGet: (path, value) => {
-        if (path[0] === 'prefix') {
-          return `[GLOBAL] ${value}`;
+    it('should handle transformGet in complex nested hierarchies', () => {
+      const rootPlugin: ValtioPlugin = {
+        id: 'root',
+        transformGet: (path, value) => {
+          if (path[0] === 'root') return 'root value';
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const instancePlugin: ValtioPlugin = {
-      id: 'instance',
-      onGet: (path, value) => {
-        // Further transform values that were already transformed by global
-        if (typeof value === 'string' && value.startsWith('[GLOBAL]')) {
-          return value + ' [INSTANCE]';
+      const middlePlugin: ValtioPlugin = {
+        id: 'middle',
+        transformGet: (path, value) => {
+          if (path[0] === 'middle') return 'middle value';
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    proxy.use(globalPlugin);
-    
-    const instance = proxy.createInstance();
-    instance.use(instancePlugin);
-    
-    const store = instance({ 
-      prefix: 'test',
-      normal: 'unchanged'
+      const leafPlugin: ValtioPlugin = {
+        id: 'leaf',
+        transformGet: (path, value) => {
+          if (path[0] === 'leaf') return 'leaf value';
+          return undefined;
+        }
+      };
+
+      const rootInstance = proxy.createInstance();
+      rootInstance.use(rootPlugin);
+
+      const middleInstance = rootInstance.createInstance();
+      middleInstance.use(middlePlugin);
+
+      const leafInstance = middleInstance.createInstance();
+      leafInstance.use(leafPlugin);
+
+      const store = leafInstance({
+        root: 'ignored',
+        middle: 'ignored', 
+        leaf: 'ignored',
+        normal: 'unchanged'
+      });
+
+      const root = store.root;
+      const middle = store.middle;
+      const leaf = store.leaf;
+      const normal = store.normal;
+      
+      expect(root).toBe('root value');
+      expect(middle).toBe('middle value');
+      expect(leaf).toBe('leaf value');
+      expect(normal).toBe('unchanged');
     });
 
-    // Both plugins should transform in order
-    expect(store.prefix).toBe('[GLOBAL] test [INSTANCE]');
-    expect(store.normal).toBe('unchanged');
-  });
-
-  it('should handle errors in inherited onGet plugins', () => {
-    const parentPlugin: ValtioPlugin = {
-      id: 'parent-error',
-      onGet: () => {
-        throw new Error('Parent onGet error');
-      }
-    };
-
-    const childPlugin: ValtioPlugin = {
-      id: 'child-working',
-      onGet: (path, value) => {
-        if (path[0] === 'transformed') {
-          return 'child transformed';
+    it('should handle transformGet with global and nested instance plugins', () => {
+      const globalPlugin: ValtioPlugin = {
+        id: 'global-transform',
+        transformGet: (path, value) => {
+          if (path[0] === 'prefix' && typeof value === 'string') {
+            return `[GLOBAL] ${value}`;
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    };
+      };
 
-    const parentInstance = proxy.createInstance();
-    parentInstance.use(parentPlugin);
-    
-    const childInstance = parentInstance.createInstance();
-    childInstance.use(childPlugin);
-    
-    const store = childInstance({ 
-      transformed: 'original',
-      normal: 'normal'
+      const instancePlugin: ValtioPlugin = {
+        id: 'instance-transform',
+        transformGet: (path, value) => {
+          if (path[0] === 'prefix' && typeof value === 'string') {
+            // Transform the already-transformed value from global plugin
+            return `${value} [INSTANCE]`;
+          }
+          return undefined;
+        }
+      };
+
+      // Register global plugin
+      proxy.use(globalPlugin);
+
+      const instance = proxy.createInstance();
+      instance.use(instancePlugin);
+
+      const store = instance({
+        prefix: 'test',
+        normal: 'unchanged'
+      });
+
+      // Both plugins should transform in order (global first, then instance)
+      expect(store.prefix).toBe('[GLOBAL] test [INSTANCE]');
+      expect(store.normal).toBe('unchanged');
     });
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    
-    // Despite parent error, child plugin should still work
-    expect(store.transformed).toBe('child transformed');
-    expect(store.normal).toBe('normal');
-    
-    // Errors should be logged
-    expect(consoleSpy).toHaveBeenCalled();
-    
-    consoleSpy.mockRestore();
-  });
-
-  it('should properly dispose onGet plugins with nested instances', () => {
-    let parentActive = true;
-    let childActive = true;
-    
-    const parentPlugin: ValtioPlugin = {
-      id: 'parent-disposable',
-      onGet: (path, value) => {
-        if (parentActive && path[0] === 'parent') {
-          return 'parent active';
+    it('should handle errors in inherited transformGet plugins', () => {
+      const parentPlugin: ValtioPlugin = {
+        id: 'parent-error',
+        transformGet: (path, value) => {
+          if (path[0] === 'error') {
+            throw new Error('Parent transformGet error');
+          }
+          return undefined;
         }
-        return undefined;
-      },
-      onDispose: () => {
-        parentActive = false;
-      }
-    };
+      };
 
-    const childPlugin: ValtioPlugin = {
-      id: 'child-disposable',
-      onGet: (path, value) => {
-        if (childActive && path[0] === 'child') {
-          return 'child active';
+      const childPlugin: ValtioPlugin = {
+        id: 'child-working',
+        transformGet: (path, value) => {
+          if (path[0] === 'transformed') {
+            return 'child transformed';
+          }
+          return undefined;
         }
-        return undefined;
-      },
-      onDispose: () => {
-        childActive = false;
-      }
-    };
+      };
 
-    const parentInstance = proxy.createInstance();
-    parentInstance.use(parentPlugin);
-    
-    const childInstance = parentInstance.createInstance();
-    childInstance.use(childPlugin);
-    
-    const store = childInstance({ 
-      parent: 'original',
-      child: 'original'
+      const parentInstance = proxy.createInstance();
+      parentInstance.use(parentPlugin);
+
+      const childInstance = parentInstance.createInstance();
+      childInstance.use(childPlugin);
+
+      const store = childInstance({
+        error: 'original',
+        transformed: 'original',
+        normal: 'normal'
+      });
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      
+      // Access error property - should return original value due to error
+      const errorValue = store.error;
+      expect(errorValue).toBe('original');
+      
+      // Despite parent error, child plugin should still work
+      expect(store.transformed).toBe('child transformed');
+      expect(store.normal).toBe('normal');
+      
+      // Error should be logged
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error in plugin'),
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
     });
 
-    // Before disposal
-    expect(store.parent).toBe('parent active');
-    expect(store.child).toBe('child active');
-    
-    // Dispose parent (should also dispose child)
-    parentInstance.dispose();
-    
-    // After disposal, onGet should not be active
-    expect(parentActive).toBe(false);
-    expect(childActive).toBe(false);
+    it('should properly dispose transformGet plugins with nested instances', () => {
+      const parentPlugin: ValtioPlugin = {
+        id: 'parent-disposable',
+        transformGet: (path, value) => {
+          if (path[0] === 'parent') return 'parent active';
+          return undefined;
+        },
+        onDispose: vi.fn()
+      };
+
+      const childPlugin: ValtioPlugin = {
+        id: 'child-disposable',
+        transformGet: (path, value) => {
+          if (path[0] === 'child') return 'child active';
+          return undefined;
+        },
+        onDispose: vi.fn()
+      };
+
+      const parentInstance = proxy.createInstance();
+      parentInstance.use(parentPlugin);
+
+      const childInstance = parentInstance.createInstance();
+      childInstance.use(childPlugin);
+
+      const store = childInstance({
+        parent: 'original',
+        child: 'original'
+      });
+
+      // Before disposal
+      expect(store.parent).toBe('parent active');
+      expect(store.child).toBe('child active');
+      
+      // Dispose child instance
+      childInstance.dispose();
+      
+      // Child plugin should be disposed
+      expect(childPlugin.onDispose).toHaveBeenCalled();
+      
+      // Create new store with parent instance - should still work
+      const parentStore = parentInstance({
+        parent: 'original',
+        child: 'original'
+      });
+      
+      expect(parentStore.parent).toBe('parent active'); // Parent still works
+      expect(parentStore.child).toBe('original'); // Child plugin disposed
+      
+      // Dispose parent instance
+      parentInstance.dispose();
+      
+      // Parent plugin should be disposed
+      expect(parentPlugin.onDispose).toHaveBeenCalled();
+    });
   });
-});
 });

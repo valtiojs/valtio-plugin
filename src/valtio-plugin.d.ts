@@ -1,7 +1,4 @@
-// valtio.d.ts - TypeScript module augmentation for valtio
 import type { INTERNAL_Op, Snapshot } from 'valtio'
-
-// Import our plugin types
 export interface ValtioPlugin {
   id: string
   name?: string
@@ -12,8 +9,15 @@ export interface ValtioPlugin {
   beforeChange?: (path: string[], value: unknown, prevValue: unknown, state: object) => undefined | boolean
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
-  onGet?: (path: string[], value: unknown, state: object) => unknown | void
+  onGet?: (path: string[], value: unknown, state: object) => void
+  transformGet?: (path: string[], value: unknown, state: object) => unknown | void
   onDispose?: () => void
+  
+  // Transform hooks
+  transformSet?: (path: string[], value: unknown, state: object) => unknown | void
+  
+  // canProxy hook for controlling what gets proxied
+  canProxy?: (value: unknown) => boolean | undefined
   
   // Path-specific handlers
   pathHandlers?: Record<string, (value: unknown, state: object) => void>
@@ -53,4 +57,3 @@ export interface EnhancedGlobalProxy {
   createInstance: () => ProxyFactory
   [pluginId: string]: unknown // For plugin access
 }
-
