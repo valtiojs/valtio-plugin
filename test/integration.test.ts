@@ -151,175 +151,94 @@ describe('Integration Tests', () => {
     });
     
     it('should work with a validation plugin', () => {
-  // Create a validation plugin with methods directly on plugin object
-  const createValidationPlugin = () => ({
-    id: 'validation',
-    name: 'Validation Plugin',
-    
-    // Plugin API methods directly on plugin
-    validate: vi.fn(),
-    addSchema: vi.fn(),
-    
-    // Transform and normalize valid data
-    transformSet: (path, value) => {
-      const fieldName = path[path.length - 1]?.toString();
+      const createValidationPlugin = () => ({
+        id: 'validation',
+        name: 'Validation Plugin',
+        
+        // Plugin API methods directly on plugin
+        validate: vi.fn(),
+        addSchema: vi.fn(),
+        
+        // Transform valid values, leave invalid ones untransformed
+        transformSet: (path, value) => {
+          const fieldName = path[path.length - 1]?.toString();
+          
+          // Email normalization (only if it looks like a valid email)
+          if (fieldName === 'email' && typeof value === 'string' && value.includes('@')) {
+            return value.trim().toLowerCase();
+          }
+          
+          // Age normalization (only if positive)
+          if (fieldName === 'age' && typeof value === 'number' && value >= 0) {
+            return Math.floor(value);
+          }
+          
+          return undefined; // No transformation for other cases
+        },
+        
+        // Validate values after any transformation
+        beforeChange: (path, value, prevValue, state) => {
+          const fieldName = path[path.length - 1]?.toString();
+          
+          // Count validation
+          if (fieldName === 'count' && typeof value === 'number' && value < 0) {
+            console.error('Validation failed: count must be >= 0');
+            return false;
+          }
+          
+          // Email validation (after any transformation from transformSet)
+          if (fieldName === 'email' && typeof value === 'string' && !value.includes('@')) {
+            console.error('Validation failed: invalid email format');
+            return false;
+          }
+          
+          // Age validation (after any transformation from transformSet)
+          if (fieldName === 'age' && typeof value === 'number' && value < 0) {
+            console.error('Validation failed: age must be >= 0');
+            return false;
+          }
+          
+          return true;
+        },
+      });
       
-      // Email normalization (only if valid)
-      if (fieldName === 'email' && typeof value === 'string' && value.includes('@')) {
-        return value.trim().toLowerCase();
-      }
+      // Use the plugin
+      const instance = proxy.createInstance();
+      const validationPlugin = createValidationPlugin();
+      instance.use(validationPlugin);
       
-      // Age normalization (only if valid)
-      if (fieldName === 'age' && typeof value === 'number' && value >= 0) {
-        return Math.floor(value); // Normalize to integer
-      }
+      const store = instance({ count: 0, email: '', age: 0 });
       
-      return undefined; // No transformation
-    },
-    
-    // Validation that can prevent changes
-    beforeChange: (path, value, prevValue, state) => {
-      const fieldName = path[path.length - 1]?.toString();
+      // Valid changes should work
+      store.count = 5;
+      expect(store.count).toBe(5);
       
-      // Email validation
-      if (fieldName === 'email' && typeof value === 'string') {
-        if (!value.includes('@')) {
-          console.error('Validation failed: invalid email format');
-          return false; // Reject the change
-        }
-      }
+      store.email = '  USER@EXAMPLE.COM  ';
+      expect(store.email).toBe('user@example.com'); // Transformed
       
-      // Age validation
-      if (fieldName === 'age' && typeof value === 'number') {
-        if (value < 0) {
-          console.error('Validation failed: age must be >= 0');
-          return false; // Reject the change
-        }
-      }
+      store.age = 25.7;
+      expect(store.age).toBe(25); // Rounded down
       
-      // Count validation
-      if (path[0] === 'count' && typeof value === 'number' && value < 0) {
-        console.error('Validation failed: count must be >= 0');
-        return false;
-      }
-      return true;
-    },
-  });
-  
-  // Use the plugin
-  const instance = proxy.createInstance();
-  const validationPlugin = createValidationPlugin();
-  instance.use(validationPlugin);
-  
-  const store = instance({ count: 0, email: '', age: 0 });
-  
-  // Valid changes should work and be transformed
-  store.count = 5;
-  expect(store.count).toBe(5);
-  
-  store.email = '  USER@EXAMPLE.COM  ';
-  expect(store.email).toBe('user@example.com'); // Normalized
-  
-  store.age = 25.7;
-  expect(store.age).toBe(25); // Rounded down
-  
-  // Mock console.error
-  const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-  
-  // Invalid changes should be rejected
-  store.count = -1;
-  expect(store.count).toBe(5); // Still 5, not -1
-  
-  store.email = 'invalid-email';
-  expect(store.email).toBe('user@example.com'); // Unchanged
-  
-  store.age = -5;
-  expect(store.age).toBe(25); // Unchanged
-  
-  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: count must be >= 0');
-  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: invalid email format');
-  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: age must be >= 0');
-  
-  // Cleanup
-  consoleSpy.mockRestore();
-});
-
-// For transform.test.ts - "should implement a validation system with transformSet"
-it('should implement a validation system with transformSet and beforeChange', () => {
-  const plugin: ValtioPlugin = {
-    id: 'validation',
-    
-    // Transform valid data
-    transformSet: (path, value) => {
-      const fieldName = path[path.length - 1]?.toString();
+      // Mock console.error
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
-      // Email normalization (only for valid emails)
-      if (fieldName === 'email' && typeof value === 'string' && value.includes('@')) {
-        return value.toLowerCase().trim();
-      }
+      // Invalid changes should be rejected
+      store.count = -1;
+      expect(store.count).toBe(5); // Still 5, not -1
       
-      // Age normalization (only for valid ages)
-      if (fieldName === 'age' && typeof value === 'number' && value >= 0 && value <= 150) {
-        return Math.floor(value); // Round down to integer
-      }
+      store.email = 'invalid-email'; // No @ symbol, should be rejected
+      expect(store.email).toBe('user@example.com'); // Unchanged
       
-      return undefined; // No transformation
-    },
-    
-    // Validation that rejects invalid data
-    beforeChange: (path, value) => {
-      const fieldName = path[path.length - 1]?.toString();
+      store.age = -5; // Negative age, should be rejected
+      expect(store.age).toBe(25); // Unchanged
       
-      // Email validation
-      if (fieldName === 'email' && typeof value === 'string') {
-        if (!value.includes('@')) {
-          console.warn('Invalid email format');
-          return false; // Reject the change
-        }
-      }
+      expect(consoleSpy).toHaveBeenCalledWith('Validation failed: count must be >= 0');
+      expect(consoleSpy).toHaveBeenCalledWith('Validation failed: invalid email format');
+      expect(consoleSpy).toHaveBeenCalledWith('Validation failed: age must be >= 0');
       
-      // Age validation
-      if (fieldName === 'age' && typeof value === 'number') {
-        if (value < 0 || value > 150) {
-          console.warn('Invalid age');
-          return false; // Reject the change
-        }
-      }
-      
-      return true; // Allow the change
-    },
-  };
-
-  const instance = proxy.createInstance();
-  instance.use(plugin);
-  
-  const store = instance({ 
-    email: 'default@example.com',
-    age: 25
-  });
-
-  const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-  // Valid transformations
-  store.email = '  USER@EXAMPLE.COM  ';
-  store.age = 30.7;
-  
-  expect(store.email).toBe('user@example.com');
-  expect(store.age).toBe(30);
-
-  // Invalid changes should be rejected
-  store.email = 'invalid-email';
-  store.age = -5;
-  
-  // Should keep previous valid values
-  expect(store.email).toBe('user@example.com');
-  expect(store.age).toBe(30);
-  
-  expect(consoleSpy).toHaveBeenCalledWith('Invalid email format');
-  expect(consoleSpy).toHaveBeenCalledWith('Invalid age');
-
-  consoleSpy.mockRestore();
-});
+      // Cleanup
+      consoleSpy.mockRestore();
+    });
   });
   
   describe('React integration', () => {

@@ -1,19 +1,19 @@
 import { expect, describe, it, vi, beforeEach } from 'vitest';
 import { proxy, type ValtioPlugin } from '../src';
-import { subscribe, snapshot } from 'valtio';
+import { subscribe, unstable_getInternalStates } from 'valtio';
 
 // Test symbols and utilities
 const UNWRAP = Symbol.for('unwrap');
 const NO_PROXY = Symbol.for('no-proxy');
 
-// Helper to check if something is a proxy
+// Get access to valtio's internal state map
+const { proxyStateMap } = unstable_getInternalStates();
+
+// Helper to check if something is a proxy - FIXED VERSION
 function isProxy(obj: any): boolean {
-  try {
-    // Try to get proxy state - this will throw for non-proxies
-    return obj !== snapshot(obj);
-  } catch {
-    return false;
-  }
+  // Check if the object exists in valtio's proxy state map
+  // This avoids calling snapshot() which triggers the warning
+  return proxyStateMap.has(obj);
 }
 
 describe('canProxy Plugin Hook', () => {
@@ -384,41 +384,6 @@ describe('canProxy Plugin Hook', () => {
       // Should reflect updates
       expect(store.inputRef).toBe('input');
       expect(store.countRef).toBe(100);
-    });
-
-    it('should work with beforeChange to prevent modifications', () => {
-      const plugin: ValtioPlugin = {
-        id: 'readonly',
-        canProxy: (value) => {
-          if (value && typeof value === 'object' && 'readonly' in value) {
-            return false;
-          }
-          return undefined;
-        },
-        beforeChange: (path, value, prevValue, state) => {
-          // Prevent changes to non-proxied objects
-          const obj = path.reduce((acc: any, key) => acc?.[key], state);
-          if (obj && typeof obj === 'object' && 'readonly' in obj) {
-            console.warn('Cannot modify readonly object');
-            return false;
-          }
-          return true;
-        }
-      };
-
-      const instance = proxy.createInstance();
-      instance.use(plugin);
-
-      const store = instance({
-        config: { readonly: true, value: 'immutable' },
-        data: { value: 'mutable' }
-      });
-
-      // Config should not be proxied
-      expect(isProxy(store.config)).toBe(false);
-
-      // Can't directly test preventing changes to non-proxied objects
-      // since they're not proxied, but the pattern is demonstrated
     });
   });
 

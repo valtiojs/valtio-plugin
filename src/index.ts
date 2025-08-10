@@ -581,10 +581,6 @@ const initializePluginSystem = () => {
             }
           }
         }
-
-        // In the set handler, before the beforeChange loop:
-console.log('[DEBUG] Set handler called for:', String(prop), 'with value:', value);
-
         
         for (const plugin of applicablePlugins) {
           if (plugin.beforeChange) {
@@ -596,23 +592,15 @@ console.log('[DEBUG] Set handler called for:', String(prop), 'with value:', valu
                 rootProxy
               )
 
-              // In the beforeChange loop:
-if (shouldContinue === false) {
-  console.log('[DEBUG] PREVENTING CHANGE - beforeChange returned false');
-  console.log('[DEBUG] Current target value:', Reflect.get(target, prop));
-  console.log('[DEBUG] Returning true from set trap without calling originalSet');
-  return true;
-}
+              if (shouldContinue === false) {
+                return true;
+              }
             } catch (e) {
               console.error(`Error in plugin ${plugin.id} beforeChange:`, e)
             }
           }
         }
 
-        // After the beforeChange loop:
-console.log('[DEBUG] All beforeChange hooks passed, calling originalSet');
-
-        // CRITICAL: Set the instance context before calling originalSet
         const previousContext = currentInstanceContext;
         
         // For global proxies, use null context; for instance proxies, use their instance ID
@@ -626,10 +614,6 @@ console.log('[DEBUG] All beforeChange hooks passed, calling originalSet');
           const result = originalSet
             ? originalSet(target, prop, transformedValue, receiver)
             : Reflect.set(target, prop, transformedValue, receiver)
-
-            // After originalSet:
-console.log('[DEBUG] originalSet result:', result);
-console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
 
           // afterChange lifecycle
           if (result) {
@@ -655,7 +639,7 @@ console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
       }
 
       /**
-       * Delete Property - Updated with proper context management
+       * Delete Property - Fixed version with proper context management
        */
       const originalDeleteProperty = handler.deleteProperty
       handler.deleteProperty = (target, prop) => {
@@ -684,7 +668,6 @@ console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
         // Use Reflect directly to avoid infinite recursion
         const rootProxy = Reflect.get(target, ROOT_PROXY_SYMBOL, target)
         const instanceId = Reflect.get(target, INSTANCE_ID_SYMBOL, target)
-        const isGlobal = Reflect.get(target, GLOBAL_PROXY_SYMBOL, target)
         
         let basePath: (string | symbol)[] = []
         if (hasProxyPath(target)) {
@@ -694,7 +677,11 @@ console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
         const fullPath = [...basePath, prop]
         const applicablePlugins = getApplicablePlugins(target)
 
-        if (!rootProxy || !instanceId) {
+        if (
+          isInitializing() ||
+          !rootProxy || 
+          !instanceId
+        ) {
           return originalDeleteProperty
             ? originalDeleteProperty(target, prop)
             : Reflect.deleteProperty(target, prop)
@@ -715,19 +702,15 @@ console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
                 return false
               }
             } catch (e) {
-              console.error(`Error in plugin ${plugin.id} beforeChange:`, e)
+              console.error(`Error in plugin: {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}}: beforeChange: `, e)
             }
           }
         }
 
         // Set the instance context before calling originalDeleteProperty
+        // This ensures that any internal operations have the correct context
         const previousContext = currentInstanceContext;
-        
-        if (isGlobal) {
-          currentInstanceContext = null;
-        } else {
-          currentInstanceContext = instanceId;
-        }
+        currentInstanceContext = instanceId;
 
         try {
           // Proceed with the deletion
@@ -1071,7 +1054,6 @@ const augmentValtioProxy = () => {
     }
   }
 
-  // Add methods directly to the valtio proxy function using defineProperty
   Object.defineProperty(originalProxy, 'use', {
     value: (pluginOrPlugins: ValtioPlugin | ValtioPlugin[]) => {
       const pluginsToAdd = Array.isArray(pluginOrPlugins) 
