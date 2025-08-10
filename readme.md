@@ -203,12 +203,12 @@ const comprehensivePlugin: ValtioPlugin = {
     return value
   },
 
-  canProxy: (value) => {
+  canProxy: (value, prev) => {
     // return a boolean value to tell valtio whether or not to proxy that object
     if (typeof value === 'number') {
       return false
     }
-    return true
+    return prev(value)
   },
   
   // Called when factory is disposed
