@@ -10,11 +10,11 @@ export interface ValtioPlugin {
   afterChange?: (path: string[], value: unknown, state: object) => void
   onSubscribe?: (proxy: object, callback: (ops: INTERNAL_Op[]) => void) => void
   onGet?: (path: string[], value: unknown, state: object) => void
-  transformGet?: (path: string[], value: unknown, state: object) => unknown | void
   onDispose?: () => void
   
   // Transform hooks
   transformSet?: (path: string[], value: unknown, state: object) => unknown | void
+  transformGet?: (path: string[], value: unknown, state: object) => unknown | void
   
   // canProxy hook for controlling what gets proxied
   canProxy?: (value: unknown) => boolean | undefined

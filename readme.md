@@ -182,6 +182,34 @@ const comprehensivePlugin: ValtioPlugin = {
   onSnapshot: (snapshot) => {
     console.log('Snapshot created')
   },
+
+  onGet: (path, value) => {
+    console.log(`Path: ${path} = ${value}`)
+  },
+
+  transformGet: (path, value) => {
+    if (path.includes("foo")) {
+      // always return "bar" if the path contains "foo"
+      return "bar"
+    }
+    return value
+  },
+
+  transformSet: (path, value) => {
+    if (path === "boo") {
+      // override whatever the value was being sent to and instead return "boo"
+      return "AHHH"
+    }
+    return value
+  },
+
+  canProxy: (value) => {
+    // return a boolean value to tell valtio whether or not to proxy that object
+    if (typeof value === 'number') {
+      return false
+    }
+    return true
+  },
   
   // Called when factory is disposed
   onDispose: () => {
@@ -557,6 +585,10 @@ interface ValtioPlugin {
   onSubscribe?: (proxyObject, callback) => void
   onSnapshot?: (snapshot) => void
   onDispose?: () => void
+  onGet?: (path: string[], value: unknown, state: object) => void
+  transformGet?: (path: string[], value: unknown, state: object) => unknown | void
+  transformSet?: (path: string[], value: unknown, state: object) => unknown | void
+  canProxy?: (value: unknown) => boolean | undefined
   
   // Custom properties (plugin API)
   [key: string]: unknown
@@ -593,6 +625,19 @@ const createMyPlugin = (options = {}) => {
     afterChange: (path, value, state) => {
       // React to changes
     },
+
+    transformGet: (path, value) => {
+      // Use this if you need to send special values back when a property is accessed
+    },
+
+    transformSet: (path, value) => {
+      // Use this to transform a value while it is being set
+    },
+
+    canProxy: (value) => {
+      // You can use this to overwrite the default canProxy global function from valtio
+      // This can either be place on the global proxy object or on instances
+    },
     
     onDispose: () => {
       // Cleanup resources
@@ -602,6 +647,8 @@ const createMyPlugin = (options = {}) => {
     publicMethod: () => {
       // Plugin functionality
     },
+
+
 
   }
 }
