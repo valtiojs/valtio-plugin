@@ -17,7 +17,10 @@ export interface ValtioPlugin {
   transformGet?: (path: string[], value: unknown, state: object) => unknown | void
   
   // canProxy hook for controlling what gets proxied
-  canProxy?: (value: unknown) => boolean | undefined
+  canProxy?: (
+    value: unknown, 
+    defaultCanProxy: (value: unknown) => boolean
+  ) => boolean | undefined;
   
   // Path-specific handlers
   pathHandlers?: Record<string, (value: unknown, state: object) => void>

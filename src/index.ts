@@ -421,7 +421,7 @@ const initializePluginSystem = () => {
       for (const plugin of plugins) {
         if (plugin.canProxy) {
           try {
-            const result = plugin.canProxy(value);
+            const result = plugin.canProxy(value, originalCanProxy);
             // If any plugin returns false, don't proxy
             if (result === false) {
               return false;
