@@ -1,5 +1,3 @@
-
-
 import { expect, describe, it, vi, beforeEach } from 'vitest';
 import { useSnapshot } from 'valtio/react';
 // Import the enhanced proxy
@@ -55,6 +53,15 @@ describe('Integration Tests', () => {
           // Save to storage
           mockStorage.setItem(options.name, JSON.stringify(state));
         },
+
+        // Auto-format data when saving
+        transformSet: (path, value) => {
+          // Add metadata to all objects being persisted
+          if (value && typeof value === 'object' && !Array.isArray(value) && !('_persisted' in value)) {
+            return { ...value, _persisted: true, _savedAt: Date.now() };
+          }
+          return undefined;
+        }
       });
       
       // Use the plugin
@@ -70,6 +77,11 @@ describe('Integration Tests', () => {
       // Modifying the state should trigger localStorage.setItem
       store.count = 1;
       expect(mockStorage.setItem).toHaveBeenCalledWith('my-store', expect.any(String));
+      
+      // Add an object - should get persistence metadata
+      (store as any).user = { name: 'John' };
+      expect((store as any).user._persisted).toBe(true);
+      expect((store as any).user._savedAt).toBeDefined();
       
       // We should be able to access the plugin API
       (instance as any).persist.pause();
@@ -94,6 +106,20 @@ describe('Integration Tests', () => {
         ...mockLogger,
         setLevel: vi.fn(),
         
+        // Transform sensitive data before logging
+        transformSet: (path, value) => {
+          // Mask sensitive fields in logs
+          if (typeof value === 'string') {
+            const fieldName = path[path.length - 1]?.toString();
+            if (['password', 'secret', 'token'].includes(fieldName || '')) {
+              // Log the attempt but mask the value
+              mockLogger.info(`Setting sensitive field: ${fieldName}`);
+              return value; // Keep original value
+            }
+          }
+          return undefined;
+        },
+        
         beforeChange: (path, value, prevValue, state) => {
           mockLogger.debug(`Will change ${path.join('.')} from ${prevValue} to ${value}`);
           return true;
@@ -108,7 +134,7 @@ describe('Integration Tests', () => {
       const loggerPlugin = createLoggerPlugin({ level: 'debug' });
       proxy.use(loggerPlugin);
       
-      const store = proxy({ count: 0 });
+      const store = proxy({ count: 0, password: '' });
       
       // Log methods should be accessible
       (proxy as any).logger.debug('Custom debug message');
@@ -118,50 +144,182 @@ describe('Integration Tests', () => {
       store.count = 1;
       expect((proxy as any).logger.debug).toHaveBeenCalledWith(expect.stringContaining('Will change count'));
       expect((proxy as any).logger.info).toHaveBeenCalledWith(expect.stringContaining('Changed count'));
+      
+      // Setting sensitive field should be logged specially
+      store.password = 'secret123';
+      expect((proxy as any).logger.info).toHaveBeenCalledWith('Setting sensitive field: password');
     });
     
     it('should work with a validation plugin', () => {
-      // Create a validation plugin with methods directly on plugin object
-      const createValidationPlugin = () => ({
-        id: 'validation',
-        name: 'Validation Plugin',
-        
-        // Plugin API methods directly on plugin
-        validate: vi.fn(),
-        addSchema: vi.fn(),
-        
-        beforeChange: (path, value, prevValue, state) => {
-          // Simple validation - count must be >= 0
-          if (path[0] === 'count' && typeof value === 'number' && value < 0) {
-            console.error('Validation failed: count must be >= 0');
-            return false;
-          }
-          return true;
-        },
-      });
+  // Create a validation plugin with methods directly on plugin object
+  const createValidationPlugin = () => ({
+    id: 'validation',
+    name: 'Validation Plugin',
+    
+    // Plugin API methods directly on plugin
+    validate: vi.fn(),
+    addSchema: vi.fn(),
+    
+    // Transform and normalize valid data
+    transformSet: (path, value) => {
+      const fieldName = path[path.length - 1]?.toString();
       
-      // Use the plugin
-      const instance = proxy.createInstance();
-      const validationPlugin = createValidationPlugin();
-      instance.use(validationPlugin);
+      // Email normalization (only if valid)
+      if (fieldName === 'email' && typeof value === 'string' && value.includes('@')) {
+        return value.trim().toLowerCase();
+      }
       
-      const store = instance({ count: 0 });
+      // Age normalization (only if valid)
+      if (fieldName === 'age' && typeof value === 'number' && value >= 0) {
+        return Math.floor(value); // Normalize to integer
+      }
       
-      // Valid change should work
-      store.count = 5;
-      expect(store.count).toBe(5);
+      return undefined; // No transformation
+    },
+    
+    // Validation that can prevent changes
+    beforeChange: (path, value, prevValue, state) => {
+      const fieldName = path[path.length - 1]?.toString();
       
-      // Mock console.error
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // Email validation
+      if (fieldName === 'email' && typeof value === 'string') {
+        if (!value.includes('@')) {
+          console.error('Validation failed: invalid email format');
+          return false; // Reject the change
+        }
+      }
       
-      // Invalid change should be rejected
-      store.count = -1;
-      expect(store.count).toBe(5); // Still 5, not -1
-      expect(consoleSpy).toHaveBeenCalledWith('Validation failed: count must be >= 0');
+      // Age validation
+      if (fieldName === 'age' && typeof value === 'number') {
+        if (value < 0) {
+          console.error('Validation failed: age must be >= 0');
+          return false; // Reject the change
+        }
+      }
       
-      // Cleanup
-      consoleSpy.mockRestore();
-    });
+      // Count validation
+      if (path[0] === 'count' && typeof value === 'number' && value < 0) {
+        console.error('Validation failed: count must be >= 0');
+        return false;
+      }
+      return true;
+    },
+  });
+  
+  // Use the plugin
+  const instance = proxy.createInstance();
+  const validationPlugin = createValidationPlugin();
+  instance.use(validationPlugin);
+  
+  const store = instance({ count: 0, email: '', age: 0 });
+  
+  // Valid changes should work and be transformed
+  store.count = 5;
+  expect(store.count).toBe(5);
+  
+  store.email = '  USER@EXAMPLE.COM  ';
+  expect(store.email).toBe('user@example.com'); // Normalized
+  
+  store.age = 25.7;
+  expect(store.age).toBe(25); // Rounded down
+  
+  // Mock console.error
+  const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  
+  // Invalid changes should be rejected
+  store.count = -1;
+  expect(store.count).toBe(5); // Still 5, not -1
+  
+  store.email = 'invalid-email';
+  expect(store.email).toBe('user@example.com'); // Unchanged
+  
+  store.age = -5;
+  expect(store.age).toBe(25); // Unchanged
+  
+  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: count must be >= 0');
+  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: invalid email format');
+  expect(consoleSpy).toHaveBeenCalledWith('Validation failed: age must be >= 0');
+  
+  // Cleanup
+  consoleSpy.mockRestore();
+});
+
+// For transform.test.ts - "should implement a validation system with transformSet"
+it('should implement a validation system with transformSet and beforeChange', () => {
+  const plugin: ValtioPlugin = {
+    id: 'validation',
+    
+    // Transform valid data
+    transformSet: (path, value) => {
+      const fieldName = path[path.length - 1]?.toString();
+      
+      // Email normalization (only for valid emails)
+      if (fieldName === 'email' && typeof value === 'string' && value.includes('@')) {
+        return value.toLowerCase().trim();
+      }
+      
+      // Age normalization (only for valid ages)
+      if (fieldName === 'age' && typeof value === 'number' && value >= 0 && value <= 150) {
+        return Math.floor(value); // Round down to integer
+      }
+      
+      return undefined; // No transformation
+    },
+    
+    // Validation that rejects invalid data
+    beforeChange: (path, value) => {
+      const fieldName = path[path.length - 1]?.toString();
+      
+      // Email validation
+      if (fieldName === 'email' && typeof value === 'string') {
+        if (!value.includes('@')) {
+          console.warn('Invalid email format');
+          return false; // Reject the change
+        }
+      }
+      
+      // Age validation
+      if (fieldName === 'age' && typeof value === 'number') {
+        if (value < 0 || value > 150) {
+          console.warn('Invalid age');
+          return false; // Reject the change
+        }
+      }
+      
+      return true; // Allow the change
+    },
+  };
+
+  const instance = proxy.createInstance();
+  instance.use(plugin);
+  
+  const store = instance({ 
+    email: 'default@example.com',
+    age: 25
+  });
+
+  const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  // Valid transformations
+  store.email = '  USER@EXAMPLE.COM  ';
+  store.age = 30.7;
+  
+  expect(store.email).toBe('user@example.com');
+  expect(store.age).toBe(30);
+
+  // Invalid changes should be rejected
+  store.email = 'invalid-email';
+  store.age = -5;
+  
+  // Should keep previous valid values
+  expect(store.email).toBe('user@example.com');
+  expect(store.age).toBe(30);
+  
+  expect(consoleSpy).toHaveBeenCalledWith('Invalid email format');
+  expect(consoleSpy).toHaveBeenCalledWith('Invalid age');
+
+  consoleSpy.mockRestore();
+});
   });
   
   describe('React integration', () => {
@@ -211,39 +369,38 @@ describe('Integration Tests', () => {
       const transformPlugin = {
         id: 'transform',
         name: 'Transform Plugin',
-        beforeChange: vi.fn((path, value) => {
-          // Double any number values for count
+        transformSet: vi.fn((path, value) => {
+          // Square any number values for count
           if (path[0] === 'count' && typeof value === 'number') {
-            // This doesn't actually modify the value, just tests the logic
-            return true;
+            return value * value;
           }
-          return true;
+          return undefined;
         }),
       };
       
       // Register all plugins
       const instance = proxy.createInstance();
-      instance.use([validationPlugin, loggingPlugin, transformPlugin]);
+      instance.use([transformPlugin, validationPlugin, loggingPlugin]);
       
       const store = instance({ count: 0 });
       
-      // Valid change (even number)
+      // Valid change (even number, will be squared: 2*2=4)
       store.count = 2;
-      expect(store.count).toBe(2);
-      expect(validationPlugin.beforeChange).toHaveBeenCalled();
+      expect(store.count).toBe(4); // Transformed by square
+      expect(transformPlugin.transformSet).toHaveBeenCalled();
+      expect(validationPlugin.beforeChange).toHaveBeenCalledWith(['count'], 4, 0, store); // Called with transformed value
       expect(loggingPlugin.beforeChange).toHaveBeenCalled();
-      expect(transformPlugin.beforeChange).toHaveBeenCalled();
       expect(loggingPlugin.afterChange).toHaveBeenCalled();
       
       // Reset mocks
       vi.clearAllMocks();
       
-      // Invalid change (odd number)
+      // Invalid change (odd number after transformation: 3*3=9)
       store.count = 3;
-      expect(store.count).toBe(2); // Still 2, not 3
-      expect(validationPlugin.beforeChange).toHaveBeenCalled();
+      expect(store.count).toBe(4); // Still 4, not 9
+      expect(transformPlugin.transformSet).toHaveBeenCalled();
+      expect(validationPlugin.beforeChange).toHaveBeenCalledWith(['count'], 9, 4, store); // Called with transformed value (9)
       expect(loggingPlugin.beforeChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
-      expect(transformPlugin.beforeChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
       expect(loggingPlugin.afterChange).not.toHaveBeenCalled(); // Shouldn't be called if validation fails
     });
   });
@@ -302,8 +459,8 @@ describe('Integration Tests', () => {
     });
   });
 
-  describe('Real-world onGet usage patterns', () => {
-    it('should implement a lazy loading system with onGet', () => {
+  describe('Real-world transform usage patterns', () => {
+    it('should implement a lazy loading system with transformGet', () => {
       const mockApi = {
         fetchUser: vi.fn().mockResolvedValue({ id: 1, name: 'John Doe', email: 'john@example.com' }),
         fetchPosts: vi.fn().mockResolvedValue([
@@ -320,7 +477,7 @@ describe('Integration Tests', () => {
         _cache: new Map<string, any>(),
         _loading: new Set<string>(),
         
-        onGet: function(path, value, state) {
+        transformGet: function(path, value, state) {
           const pathKey = path.join('.');
           
           // Only handle properties starting with 'lazy_'
@@ -384,7 +541,7 @@ describe('Integration Tests', () => {
         id: 'computed',
         name: 'Computed Properties Plugin',
         
-        onGet: (path, value, state) => {
+        transformGet: (path, value, state) => {
           const pathStr = path.join('.');
           
           // Handle computed properties (properties ending with _computed)
@@ -438,7 +595,7 @@ describe('Integration Tests', () => {
       expect(subtotal2).toBe(12.25);
     });
 
-    it('should implement a permissions system with onGet', () => {
+    it('should implement a permissions system with transformGet', () => {
       interface User {
         id: string;
         role: 'admin' | 'user' | 'guest';
@@ -456,7 +613,7 @@ describe('Integration Tests', () => {
           currentUser = user;
         },
         
-        onGet: (path, value, state) => {
+        transformGet: (path, value, state) => {
           const pathStr = path.join('.');
           
           // Admin panel - admins only
@@ -529,7 +686,7 @@ describe('Integration Tests', () => {
       expect(store.users[0].email).toBe('john@example.com'); // Full email visible
     });
 
-    it('should implement i18n with onGet', () => {
+    it('should implement i18n with transformGet', () => {
       const translations = {
         en: {
           greeting: 'Hello',
@@ -559,7 +716,7 @@ describe('Integration Tests', () => {
           currentLocale = locale;
         },
         
-        onGet: (path, value) => {
+        transformGet: (path, value) => {
           // Only transform strings starting with 't.'
           if (typeof value === 'string' && value.startsWith('t.')) {
             const key = value.substring(2);
@@ -603,6 +760,153 @@ describe('Integration Tests', () => {
       expect(store.subtitle).toBe('Adiós');
       expect(store.menu.fruit1).toBe('Manzana');
       expect(store.menu.fruit2).toBe('Plátano');
+    });
+
+    it('should implement data normalization with transformSet', () => {
+      const normalizationPlugin: ValtioPlugin = {
+        id: 'normalization',
+        name: 'Data Normalization Plugin',
+        
+        transformSet: (path, value) => {
+          // Normalize user objects
+          if (typeof value === 'object' && value && 'name' in value && 'email' in value) {
+            const normalized = { ...value } as any;
+            
+            // Normalize name
+            if (typeof normalized.name === 'string') {
+              normalized.name = normalized.name.trim().replace(/\s+/g, ' ');
+            }
+            
+            // Normalize email
+            if (typeof normalized.email === 'string') {
+              normalized.email = normalized.email.toLowerCase().trim();
+            }
+            
+            // Auto-generate slug from name
+            if (normalized.name && !normalized.slug) {
+              normalized.slug = normalized.name.toLowerCase().replace(/\s+/g, '-');
+            }
+            
+            // Add timestamps
+            normalized.updatedAt = new Date().toISOString();
+            if (!normalized.createdAt) {
+              normalized.createdAt = normalized.updatedAt;
+            }
+            
+            return normalized;
+          }
+          
+          // Normalize phone numbers
+          if (path[path.length - 1] === 'phone' && typeof value === 'string') {
+            const digits = value.replace(/\D/g, '');
+            if (digits.length === 10) {
+              return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+            }
+            return digits;
+          }
+          
+          return undefined;
+        }
+      };
+
+      const instance = proxy.createInstance();
+      instance.use(normalizationPlugin);
+      
+      const store = instance({ 
+        users: [] as any[],
+        contacts: { phone: '' }
+      });
+
+      // Add a user - should be normalized
+      store.users.push({
+        name: '  John   Doe  ',
+        email: '  JOHN.DOE@EXAMPLE.COM  '
+      });
+
+      const user = store.users[0];
+      expect(user.name).toBe('John Doe');
+      expect(user.email).toBe('john.doe@example.com');
+      expect(user.slug).toBe('john-doe');
+      expect(user.createdAt).toBeDefined();
+      expect(user.updatedAt).toBeDefined();
+
+      // Update phone number
+      store.contacts.phone = '123-456-7890';
+      expect(store.contacts.phone).toBe('(123) 456-7890');
+    });
+
+    it('should combine observational onGet with transformative hooks', () => {
+      const accessLog: string[] = [];
+      const changeLog: string[] = [];
+      
+      const analyticsPlugin: ValtioPlugin = {
+        id: 'analytics',
+        name: 'Analytics Plugin',
+        
+        // Observe all property access (no transformation)
+        onGet: (path, value) => {
+          accessLog.push(`GET: ${path.join('.')} = ${JSON.stringify(value)}`);
+        },
+        
+        // Transform sensitive data when reading
+        transformGet: (path, value) => {
+          if (path.includes('password') && typeof value === 'string') {
+            return '***HIDDEN***';
+          }
+          return undefined;
+        },
+        
+        // Log and normalize data when setting
+        transformSet: (path, value) => {
+          changeLog.push(`SET: ${path.join('.')} = ${JSON.stringify(value)}`);
+          
+          // Auto-trim strings
+          if (typeof value === 'string') {
+            return value.trim();
+          }
+          
+          return undefined;
+        },
+        
+        afterChange: (path, value) => {
+          changeLog.push(`CHANGED: ${path.join('.')} = ${JSON.stringify(value)}`);
+        }
+      };
+
+      const instance = proxy.createInstance();
+      instance.use(analyticsPlugin);
+      
+      const store = instance({ 
+        username: '',
+        password: '',
+        data: { sensitive: false }
+      });
+
+      // Clear initial logs
+      accessLog.length = 0;
+      changeLog.length = 0;
+
+      // Set values - should be logged and transformed
+      store.username = '  john_doe  ';
+      store.password = 'secret123';
+
+      // Access values - should be logged and potentially transformed
+      const username = store.username;
+      const password = store.password;
+      const sensitiveData = store.data.sensitive;
+
+      // Check transformations
+      expect(username).toBe('john_doe'); // Trimmed
+      expect(password).toBe('***HIDDEN***'); // Hidden on read
+
+      // Check logs
+      expect(changeLog).toContain('SET: username = "  john_doe  "'); // Original value logged
+      expect(changeLog).toContain('CHANGED: username = "john_doe"'); // Final value logged
+      expect(changeLog).toContain('SET: password = "secret123"');
+
+      expect(accessLog).toContain('GET: username = "john_doe"');
+      expect(accessLog).toContain('GET: password = "secret123"'); // Original value observed
+      expect(accessLog).toContain('GET: data.sensitive = false');
     });
   });
 });

@@ -1,5 +1,7 @@
+// We want to import this from vanilla so that we don't get any
+// errors when not using react (valtio main pacakge exports useSnapshot)
+// which has a react dependency
 import {
-  type INTERNAL_Op,
   proxy as valtioProxy,
   snapshot as originalSnapshot,
   subscribe as originalSubscribe,
@@ -7,6 +9,10 @@ import {
   unstable_getInternalStates,
   unstable_replaceInternalFunction,
 } from 'valtio/vanilla'
+
+// It's important to import something from the main package that doesn't
+// require react so that we can augment the main valtio module
+import { INTERNAL_Op } from 'valtio'
 
 // Import types from the separate augmentation file
 import type { ValtioPlugin, ProxyFactory, EnhancedGlobalProxy } from './valtio-plugin'
@@ -372,6 +378,67 @@ const initializePluginSystem = () => {
     }
   })
 
+  // Enhanced canProxy hook with proper context handling
+  unstable_replaceInternalFunction('canProxy', (originalCanProxy) => {
+    return (value: unknown): boolean => {
+      // First check original canProxy
+      if (!originalCanProxy(value)) {
+        return false;
+      }
+      
+      // Get applicable plugins based on current context
+      let plugins: ValtioPlugin[] = [];
+      
+      if (currentInstanceContext) {
+        // Instance-specific context - get plugins directly from registry
+        const hierarchy: string[] = [];
+        let currentId: string | undefined = currentInstanceContext;
+        
+        // Walk up the instance hierarchy
+        while (currentId) {
+          hierarchy.unshift(currentId);
+          const registry = instanceRegistry.get(currentId);
+          if (!registry) break;
+          currentId = registry.parentId;
+        }
+        
+        // Add global plugins first
+        plugins.push(...globalPluginRegistry);
+        
+        // Add instance plugins from parent to child
+        for (const id of hierarchy) {
+          const registry = instanceRegistry.get(id);
+          if (registry && !registry.isDisposed) {
+            plugins.push(...registry.plugins);
+          }
+        }
+      } else {
+        // Global context - only global plugins
+        plugins = [...globalPluginRegistry];
+      }
+      
+      // Check each plugin's canProxy
+      for (const plugin of plugins) {
+        if (plugin.canProxy) {
+          try {
+            const result = plugin.canProxy(value);
+            // If any plugin returns false, don't proxy
+            if (result === false) {
+              return false;
+            }
+            // If plugin returns true, continue checking others
+            // If undefined, defer to other plugins/default behavior
+          } catch (e) {
+            console.error(`Error in plugin ${plugin.id} canProxy:`, e);
+          }
+        }
+      }
+      
+      // No plugin prevented proxying
+      return true;
+    };
+  });
+
   unstable_replaceInternalFunction('createHandler', (originalHandler) => {
     return (isInitializing, addPropListener, removePropListener, notifyUpdate) => {
       const handler = originalHandler(
@@ -382,7 +449,7 @@ const initializePluginSystem = () => {
       )
 
       /**
-       * Get trap
+       * Get trap - Updated with separate onGet and transformGet hooks
        */
       const originalGet = handler.get
       handler.get = (target, prop, receiver) => {
@@ -422,7 +489,7 @@ const initializePluginSystem = () => {
           }
         }
 
-        // Call onGet hooks for ALL property access
+        // Call plugin hooks for property access
         if (
           !isInitializing() &&
           rootProxy && 
@@ -435,16 +502,27 @@ const initializePluginSystem = () => {
           const fullPath = [...basePath, prop]
           const applicablePlugins = getApplicablePlugins(receiver)
 
+          // Call onGet hooks (observation only, no return value)
           for (const plugin of applicablePlugins) {
             if (plugin.onGet) {
               try {
-                const customValue = plugin.onGet(fullPath.map(String), result, rootProxy)
+                plugin.onGet(fullPath.map(String), result, rootProxy)
+              } catch (e) {
+                console.error(`Error in plugin ${plugin.id} onGet:`, e)
+              }
+            }
+          }
 
-                if (customValue !== undefined) {
-                  result = customValue
+          // Call transformGet hooks (can modify return value)
+          for (const plugin of applicablePlugins) {
+            if (plugin.transformGet) {
+              try {
+                const transformedValue = plugin.transformGet(fullPath.map(String), result, rootProxy)
+                if (transformedValue !== undefined) {
+                  result = transformedValue
                 }
               } catch (e) {
-                console.error(`Error in plugin {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in onGet: `, e)
+                console.error(`Error in plugin ${plugin.id} transformGet:`, e)
               }
             }
           }
@@ -454,7 +532,7 @@ const initializePluginSystem = () => {
       }
 
       /**
-       * Set trap
+       * Set trap - Fixed with proper context management and transformSet hook
        */
       const originalSet = handler.set
       handler.set = (target, prop, value, receiver) => {
@@ -466,12 +544,15 @@ const initializePluginSystem = () => {
         // Get metadata directly using Reflect to avoid infinite recursion
         const rootProxy = Reflect.get(receiver, ROOT_PROXY_SYMBOL, receiver)
         const instanceId = Reflect.get(receiver, INSTANCE_ID_SYMBOL, receiver)
+        const isGlobal = Reflect.get(receiver, GLOBAL_PROXY_SYMBOL, receiver)
 
-        if (
-          isInitializing() ||
-          !rootProxy || 
-          !instanceId
-        ) {
+        if (isInitializing()) {
+          return originalSet
+            ? originalSet(target, prop, value, receiver)
+            : Reflect.set(target, prop, value, receiver)
+        }
+
+        if (!rootProxy || !instanceId) {
           return originalSet
             ? originalSet(target, prop, value, receiver)
             : Reflect.set(target, prop, value, receiver)
@@ -486,51 +567,95 @@ const initializePluginSystem = () => {
         const fullPath = [...basePath, prop]
         const applicablePlugins = getApplicablePlugins(receiver)
 
+        // Transform the value before setting if any plugins have transformSet
+        let transformedValue = value
+        for (const plugin of applicablePlugins) {
+          if (plugin.transformSet) {
+            try {
+              const result = plugin.transformSet(fullPath.map(String), transformedValue, rootProxy)
+              if (result !== undefined) {
+                transformedValue = result
+              }
+            } catch (e) {
+              console.error(`Error in plugin ${plugin.id} transformSet:`, e)
+            }
+          }
+        }
+
+        // In the set handler, before the beforeChange loop:
+console.log('[DEBUG] Set handler called for:', String(prop), 'with value:', value);
+
+        
         for (const plugin of applicablePlugins) {
           if (plugin.beforeChange) {
             try {
               const shouldContinue = plugin.beforeChange(
                 fullPath.map(String),
-                value,
+                transformedValue,
                 prevValue,
                 rootProxy
               )
 
-              if (shouldContinue === false) {
-                // Plugin prevented the update
-                return true // Indicate success without actually setting
-              }
+              // In the beforeChange loop:
+if (shouldContinue === false) {
+  console.log('[DEBUG] PREVENTING CHANGE - beforeChange returned false');
+  console.log('[DEBUG] Current target value:', Reflect.get(target, prop));
+  console.log('[DEBUG] Returning true from set trap without calling originalSet');
+  return true;
+}
             } catch (e) {
-              console.error(`Error in plugin {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in beforeChange: `, e)
+              console.error(`Error in plugin ${plugin.id} beforeChange:`, e)
             }
           }
         }
 
-        const result = originalSet
-          ? originalSet(target, prop, value, receiver)
-          : Reflect.set(target, prop, value, receiver)
+        // After the beforeChange loop:
+console.log('[DEBUG] All beforeChange hooks passed, calling originalSet');
 
-        // afterChange lifecycle
-        if (result) {
-          for (const plugin of applicablePlugins) {
-            if (plugin.afterChange) {
-              try {
-                plugin.afterChange(
-                  fullPath.map(String),
-                  value,
-                  rootProxy
-                )
-              } catch (e) {
-                console.error(`Error in plugin: {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}} in afterChange: `, e)
+        // CRITICAL: Set the instance context before calling originalSet
+        const previousContext = currentInstanceContext;
+        
+        // For global proxies, use null context; for instance proxies, use their instance ID
+        if (isGlobal) {
+          currentInstanceContext = null;
+        } else {
+          currentInstanceContext = instanceId;
+        }
+
+        try {
+          const result = originalSet
+            ? originalSet(target, prop, transformedValue, receiver)
+            : Reflect.set(target, prop, transformedValue, receiver)
+
+            // After originalSet:
+console.log('[DEBUG] originalSet result:', result);
+console.log('[DEBUG] Final target value:', Reflect.get(target, prop));
+
+          // afterChange lifecycle
+          if (result) {
+            for (const plugin of applicablePlugins) {
+              if (plugin.afterChange) {
+                try {
+                  plugin.afterChange(
+                    fullPath.map(String),
+                    transformedValue,
+                    rootProxy
+                  )
+                } catch (e) {
+                  console.error(`Error in plugin ${plugin.id} afterChange:`, e)
+                }
               }
             }
           }
+          return result
+        } finally {
+          // Restore previous context
+          currentInstanceContext = previousContext;
         }
-        return result
       }
 
       /**
-       * Delete Property
+       * Delete Property - Updated with proper context management
        */
       const originalDeleteProperty = handler.deleteProperty
       handler.deleteProperty = (target, prop) => {
@@ -559,6 +684,7 @@ const initializePluginSystem = () => {
         // Use Reflect directly to avoid infinite recursion
         const rootProxy = Reflect.get(target, ROOT_PROXY_SYMBOL, target)
         const instanceId = Reflect.get(target, INSTANCE_ID_SYMBOL, target)
+        const isGlobal = Reflect.get(target, GLOBAL_PROXY_SYMBOL, target)
         
         let basePath: (string | symbol)[] = []
         if (hasProxyPath(target)) {
@@ -568,11 +694,7 @@ const initializePluginSystem = () => {
         const fullPath = [...basePath, prop]
         const applicablePlugins = getApplicablePlugins(target)
 
-        if (
-          isInitializing() ||
-          !rootProxy || 
-          !instanceId
-        ) {
+        if (!rootProxy || !instanceId) {
           return originalDeleteProperty
             ? originalDeleteProperty(target, prop)
             : Reflect.deleteProperty(target, prop)
@@ -593,33 +715,47 @@ const initializePluginSystem = () => {
                 return false
               }
             } catch (e) {
-              console.error(`Error in plugin: {name: ${plugin.name || 'unnamed'}, id: ${plugin.id}}: beforeChange: `, e)
+              console.error(`Error in plugin ${plugin.id} beforeChange:`, e)
             }
           }
         }
 
-        // Proceed with the deletion
-        const result = originalDeleteProperty 
-          ? originalDeleteProperty(target, prop) 
-          : Reflect.deleteProperty(target, prop)
+        // Set the instance context before calling originalDeleteProperty
+        const previousContext = currentInstanceContext;
+        
+        if (isGlobal) {
+          currentInstanceContext = null;
+        } else {
+          currentInstanceContext = instanceId;
+        }
 
-        // Run afterChange hooks
-        if (result) {
-          for (const plugin of applicablePlugins) {
-            if (plugin.afterChange) {
-              try {
-                plugin.afterChange(
-                  fullPath.map(String), 
-                  undefined, 
-                  rootProxy
-                )
-              } catch (e) {
-                console.error(`Error in plugin ${plugin.id} afterChange:`, e)
+        try {
+          // Proceed with the deletion
+          const result = originalDeleteProperty 
+            ? originalDeleteProperty(target, prop) 
+            : Reflect.deleteProperty(target, prop)
+
+          // Run afterChange hooks
+          if (result) {
+            for (const plugin of applicablePlugins) {
+              if (plugin.afterChange) {
+                try {
+                  plugin.afterChange(
+                    fullPath.map(String), 
+                    undefined, 
+                    rootProxy
+                  )
+                } catch (e) {
+                  console.error(`Error in plugin ${plugin.id} afterChange:`, e)
+                }
               }
             }
           }
+          return result
+        } finally {
+          // Restore previous context
+          currentInstanceContext = previousContext;
         }
-        return result
       }
 
       return handler
@@ -662,6 +798,9 @@ const disposeInstanceRecursively = (instanceId: string): void => {
   instanceRegistry.delete(instanceId)
 }
 
+// Track the current instance context during proxy creation
+let currentInstanceContext: string | null = null;
+
 function createProxyInstance(parentInstanceId?: string): ProxyFactory {
   initializePluginSystem()
 
@@ -690,26 +829,40 @@ function createProxyInstance(parentInstanceId?: string): ProxyFactory {
       throw new Error('This instance has been disposed')
     }
 
-    // Use the original proxy function from valtio
-    const valtioProxyInstance = valtioProxy(initialState)
-    
-    // Add our metadata - but for instance proxies, not global
-    const meta = { rootProxy: valtioProxyInstance, instanceId, path: []}
-    addMetaData(valtioProxyInstance, meta)
+    // Set the instance context before creating proxy
+    const previousContext = currentInstanceContext;
+    currentInstanceContext = instanceId;
 
-    // Call plugin initialization hooks for all applicable plugins (including inherited)
-    const applicablePlugins = getApplicablePlugins(valtioProxyInstance)
-    for(const plugin of applicablePlugins) {
-      if (plugin.onInit) {
-        try {
-          plugin.onInit()
-        } catch (e) {
-          console.error(`Error in plugin ${plugin.id} onInit:`, e)
+    try {
+      // Use the original proxy function from valtio
+      const valtioProxyInstance = valtioProxy(initialState)
+      
+      // Add our metadata - mark as instance proxy (NOT global)
+      const meta = { 
+        rootProxy: valtioProxyInstance, 
+        instanceId, 
+        path: [],
+        isGlobal: false  // Critical: mark as NOT global
+      }
+      addMetaData(valtioProxyInstance, meta)
+
+      // Call plugin initialization hooks for all applicable plugins (including inherited)
+      const applicablePlugins = getApplicablePlugins(valtioProxyInstance)
+      for(const plugin of applicablePlugins) {
+        if (plugin.onInit) {
+          try {
+            plugin.onInit()
+          } catch (e) {
+            console.error(`Error in plugin ${plugin.id} onInit:`, e)
+          }
         }
       }
-    }
 
-    return valtioProxyInstance
+      return valtioProxyInstance
+    } finally {
+      // Restore previous context
+      currentInstanceContext = previousContext;
+    }
   }
 
   // Create a proxy for the factory function to expose plugin APIs
@@ -890,25 +1043,32 @@ const augmentValtioProxy = () => {
   const globalId = createGlobalId()
 
   const createGlobalProxy = <T extends object>(initialState: T): T => {
-    // Use the original proxy function from valtio
-    const valtioProxyInstance = originalProxyCall(initialState)
-    
-    // Add global metadata
-    const meta = { rootProxy: valtioProxyInstance, instanceId: globalId, path: [], isGlobal: true}
-    addMetaData(valtioProxyInstance, meta)
+    const previousContext = currentInstanceContext;
+    currentInstanceContext = null;
 
-    // Call plugin initialization hooks for global plugins
-    for(const plugin of globalPluginRegistry) {
-      if (plugin.onInit) {
-        try {
-          plugin.onInit()
-        } catch (e) {
-          console.error(`Error in plugin ${plugin.id} onInit:`, e)
+    try {
+      // Use the original proxy function from valtio
+      const valtioProxyInstance = originalProxyCall(initialState)
+      
+      // Add global metadata
+      const meta = { rootProxy: valtioProxyInstance, instanceId: globalId, path: [], isGlobal: true}
+      addMetaData(valtioProxyInstance, meta)
+
+      // Call plugin initialization hooks for global plugins
+      for(const plugin of globalPluginRegistry) {
+        if (plugin.onInit) {
+          try {
+            plugin.onInit()
+          } catch (e) {
+            console.error(`Error in plugin ${plugin.id} onInit:`, e)
+          }
         }
       }
-    }
 
-    return valtioProxyInstance
+      return valtioProxyInstance
+    } finally {
+      currentInstanceContext = previousContext;
+    }
   }
 
   // Add methods directly to the valtio proxy function using defineProperty
