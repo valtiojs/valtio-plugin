@@ -647,9 +647,6 @@ const createMyPlugin = (options = {}) => {
     publicMethod: () => {
       // Plugin functionality
     },
-
-
-
   }
 }
 ```
