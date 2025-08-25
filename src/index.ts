@@ -381,7 +381,6 @@ const initializePluginSystem = () => {
 		}
 	})
 
-	// Enhanced canProxy hook with proper context handling
 	unstable_replaceInternalFunction("canProxy", (originalCanProxy) => {
 		return (value: unknown): boolean => {
 			// First check original canProxy
@@ -451,9 +450,7 @@ const initializePluginSystem = () => {
 				notifyUpdate,
 			)
 
-			/**
-			 * Get trap - Updated with separate onGet and transformGet hooks
-			 */
+			/** GET TRAP **/
 			const originalGet = handler.get
 			handler.get = (target, prop, receiver) => {
 				// Skip metadata symbol access to prevent infinite recursion
@@ -544,9 +541,7 @@ const initializePluginSystem = () => {
 				return result
 			}
 
-			/**
-			 * Set trap - Fixed with proper context management and transformSet hook
-			 */
+			/** SET TRAP **/
 			const originalSet = handler.set
 			handler.set = (target, prop, value, receiver) => {
 				// Skip metadata symbol handling
@@ -652,9 +647,7 @@ const initializePluginSystem = () => {
 				}
 			}
 
-			/**
-			 * Delete Property - Fixed version with proper context management
-			 */
+			/** DELETE TRAP **/
 			const originalDeleteProperty = handler.deleteProperty
 			handler.deleteProperty = (target, prop) => {
 				// Skip metadata symbol handling
