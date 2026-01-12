@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Canvas Token Minimap (Valtio DevTools)</title>
+  <style>
+    :root{
+      --bg:#0f172a; --rail:#0b1220; --line:#1f2937;
+      --tok-key:#7dd3fc; --tok-str:#a7f3d0; --tok-num:#fca5a5;
+      --tok-bool:#f9c74f; --tok-null:#94a3b8; --tok-punc:#475569; --tok-ident:#c4b5fd;
+    }
+    html,body{height:100%; margin:0; background:var(--bg); display:grid; place-items:center; color:#cbd5e1; font:12px system-ui,sans-serif}
+    .wrap{display:flex; gap:16px; align-items:flex-start}
+    canvas{background:var(--rail); border:1px solid var(--line); border-radius:8px; width:120px; height:480px; image-rendering:optimizeQuality}
+    .legend{max-width:360px; line-height:1.5}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="minimap" width="120" height="480" aria-label="minimap"></canvas>
+    <div class="legend">
+      <h3 style="margin:0 0 8px 0">Canvas token minimap</h3>
+      <ol>
+        <li>Each line is <em>2px</em> high; a line contains token spans with widths proportional to token length.</li>
+        <li>Colors map to token kinds (key, string, number, etc.).</li>
+        <li>“Batches” briefly increase token alpha (pulse), then decay over ~5s.</li>
+        <li>DevicePixelRatio aware; renders crisp on HiDPI displays.</li>
+      </ol>
+      <p>Hook this up by feeding your tokenizer output (path → line → tokens). For large states, draw only dirty lines each tick.</p>
+      <button id="simulate">Simulate batch</button>
+      <button id="many">Simulate heavy batch</button>
+      <p style="opacity:.8">This demo uses static token data; the “simulate” buttons add pulses to random tokens.</p>
+    </div>
+  </div>
+
+  <script>
+  // ==== Token data model ======================================================
+  // A "document" is an array of lines; each line has totalLength and tokens.
+  // Each token has kind, length, and a transient heat (0..1) we render as alpha.
+  const K = { key:'key', str:'str', num:'num', bool:'bool', nul:'null', punc:'punc', ident:'ident' };
+  const palette = {
+    [K.key]  :'#7dd3fc', [K.str]  :'#a7f3d0', [K.num]  :'#fca5a5',
+    [K.bool] :'#f9c74f', [K.nul]  :'#94a3b8', [K.punc] :'#475569',
+    [K.ident]:'#c4b5fd'
+  };
+
+  // Sample: pretend these came from serializing a Valtio snapshot
+  function sampleDoc() {
+    const L = (tokens) => ({ totalLength: tokens.reduce((s,t)=>s+t.len,0), tokens });
+    const t = (kind, len) => ({ kind, len, heat: 0 });
+    return [
+      L([t(K.key,9),t(K.punc,1),t(K.key,4),t(K.punc,1),t(K.str,7),t(K.punc,1),t(K.key,7),t(K.punc,2)]), // user {...}
+      L([t(K.ident,6),t(K.num,1),t(K.key,5),t(K.str,7),t(K.key,4),t(K.bool,4)]),                       // todos[0]
+      L([t(K.ident,6),t(K.num,1),t(K.key,5),t(K.str,9),t(K.key,4),t(K.bool,5)]),                       // todos[1]
+      L([t(K.key,7),t(K.num,1)]),                                                                       // counter
+      L([t(K.key,7),t(K.str,3)]),                                                                       // filters
+      // filler
+      ...Array.from({length:120}, (_,i)=>L([t([K.punc,K.null,K.ident,K.key][i%4], 30)])),
+    ];
+  }
+  let doc = sampleDoc();
+
+  // ==== Canvas setup (with DPR scaling) ======================================
+  const cvs = document.getElementById('minimap');
+  const ctx = cvs.getContext('2d', { alpha: true, desynchronized: true });
+  function resizeToDPR() {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = parseInt(getComputedStyle(cvs).width, 10);
+    const cssH = parseInt(getComputedStyle(cvs).height, 10);
+    if (cvs.width !== Math.floor(cssW * dpr) || cvs.height !== Math.floor(cssH * dpr)) {
+      cvs.width = Math.floor(cssW * dpr);
+      cvs.height = Math.floor(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+    }
+  }
+  resizeToDPR();
+  addEventListener('resize', resizeToDPR);
+
+  // ==== Render config =========================================================
+  const lineHeight = 2;      // px per line in CSS pixels
+  const lineGap = 1;         // vertical gap for readability
+  const leftPad = 6;         // px inner padding
+  const rightPad = 6;
+  const topPad = 8;
+
+  // ==== Rendering =============================================================
+  function render() {
+    // clear
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    // background
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0, 0, cvs.width, cvs.height);
+
+    // draw lines
+    const innerW = parseInt(getComputedStyle(cvs).width,10) - leftPad - rightPad;
+    let y = topPad;
+    for (let i = 0; i < doc.length; i++) {
+      const line = doc[i];
+      const h = lineHeight;
+      // (Optional) faint line background
+      // ctx.fillStyle = '#0c1424'; ctx.fillRect(leftPad, y, innerW, h);
+
+      // token blocks
+      const total = Math.max(1, line.totalLength);
+      let x = leftPad;
+      for (let j = 0; j < line.tokens.length; j++) {
+        const tok = line.tokens[j];
+        const w = Math.max(1, Math.round((tok.len / total) * innerW)); // clamp to >=1px
+        const base = palette[tok.kind] || '#64748b';
+        // apply heat as alpha (quick multiply)
+        const alpha = 0.35 + Math.min(0.65, tok.heat * 0.85);
+        ctx.fillStyle = rgba(base, alpha);
+        ctx.fillRect(x, y, w, h);
+        x += w + 1; // small gap between tokens
+      }
+
+      y += h + lineGap;
+      if (y > parseInt(getComputedStyle(cvs).height,10) - topPad) break; // stop if out of view
+    }
+  }
+
+  // hex → rgba with alpha
+  function rgba(hex, a) {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  // ==== Heat decay + animation loop ==========================================
+  const DECAY_MS = 5000;  // fade to base over ~5s
+  const TICK_MS  = 33;    // ~30fps, aligns with batching nicely
+
+  function decay(now, last) {
+    const dt = Math.min(1, (now - last) / DECAY_MS);
+    const factor = 1 - dt;
+    for (const line of doc) {
+      for (const tok of line.tokens) tok.heat *= factor;
+    }
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    decay(now, last);
+    last = now;
+    render();
+    anim = setTimeout(() => requestAnimationFrame(loop), TICK_MS);
+  }
+  let anim = requestAnimationFrame(loop);
+
+  // ==== Simulating batches (pulses) ==========================================
+  function pulseRandom(count=12) {
+    for (let k = 0; k < count; k++) {
+      const i = (Math.random() * doc.length) | 0;
+      const line = doc[i];
+      const j = (Math.random() * line.tokens.length) | 0;
+      line.tokens[j].heat = Math.min(1, line.tokens[j].heat + 0.9);
+    }
+  }
+
+  document.getElementById('simulate').onclick = () => pulseRandom(10);
+  document.getElementById('many').onclick = () => pulseRandom(60);
+  </script>
+</body>
+</html>
