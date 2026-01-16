@@ -10,7 +10,7 @@ A powerful plugin system that extends Valtio with custom functionality while mai
 - 🔌 **Global & Instance Plugins**: Extend Valtio globally or per-instance
 - 📘 **Full TypeScript Support**: Complete autocomplete when importing from 'valtio'
 - 🔄 **Rich Lifecycle Hooks**: `onInit`, `beforeChange`, `afterChange`, `onSubscribe`, `onAttach`
-- 🎯 **Direct Plugin Access**: Access plugins as properties (e.g., `proxy.logger`)
+- 🎯 **Direct Plugin Access**: Access plugins as properties (e.g., `proxy.logger`) or via reference
 - ⛓️ **Method Chaining**: `proxy.use(plugin1).use(plugin2)`
 - 🌍 **Module Augmentation**: Import from 'valtio' and get enhanced functionality
 - 🎪 **Zero Breaking Changes**: Works alongside existing Valtio code
@@ -32,8 +32,7 @@ See the [`examples/`](./examples) directory for complete usage examples!
 When you import this package, the `proxy` from 'valtio' automatically gets enhanced with full TypeScript support:
 
 ```typescript
-import { proxy } from 'valtio'  // Standard valtio import
-import 'valtio-plugin'          // Enables the magic ✨
+import { proxy } from 'valtio-plugin'  // import augmented proxy
 
 // Now proxy has enhanced methods with full autocomplete:
 proxy.use(myPlugin)           // ✅ Full TypeScript support
@@ -50,8 +49,7 @@ const logger = proxy.logger   // ✅ Your plugin is accessible
 Register plugins that affect **all** proxy instances:
 
 ```typescript
-import { proxy } from 'valtio'
-import { ValtioPlugin } from 'valtio-plugin'
+import { proxy, type ValtioPlugin } from 'valtio-plugin'
 
 // Create a logging plugin
 const loggingPlugin: ValtioPlugin = {
@@ -79,8 +77,10 @@ const loggingPlugin: ValtioPlugin = {
 // Register globally - affects ALL proxy instances
 proxy.use(loggingPlugin)
 
-// Access plugin methods with full TypeScript support
+// Access plugin methods - both patterns work:
 proxy.logger.info('Application started!')
+// OR keep a reference:
+loggingPlugin.info('Application started!')
 
 // Create stores - logging automatically applies
 const userStore = proxy({ name: 'John', age: 30 })
@@ -101,8 +101,7 @@ instanceStore.data = 'updated' // Also logged by global plugin!
 Create isolated proxy instances with specific plugins:
 
 ```typescript
-import { proxy } from 'valtio'
-import { ValtioPlugin } from 'valtio-plugin'
+import { proxy, type ValtioPlugin } from 'valtio-plugin'
 
 // Create validation plugin
 const validationPlugin: ValtioPlugin = {
@@ -126,8 +125,10 @@ const validationPlugin: ValtioPlugin = {
 const instance = proxy.createInstance()
 instance.use(validationPlugin)
 
-// Access instance plugin methods
+// Access instance plugin methods - both patterns work:
 instance.validator.validateRequired({ name: 'John' }, ['name']) // true
+// OR keep a reference:
+validationPlugin.validateRequired({ name: 'John' }, ['name']) // true
 
 // Create store with instance plugins
 const formStore = instance({
@@ -183,10 +184,12 @@ const comprehensivePlugin: ValtioPlugin = {
     console.log('Snapshot created')
   },
 
+  // Called when a property is accessed
   onGet: (path, value) => {
-    console.log(`Path: ${path} = ${value}`)
+    console.log(`Path: ${path.join('.')} = ${value}`)
   },
 
+  // Transform value on get
   transformGet: (path, value) => {
     if (path.includes("foo")) {
       // always return "bar" if the path contains "foo"
@@ -195,20 +198,22 @@ const comprehensivePlugin: ValtioPlugin = {
     return value
   },
 
+  // Transform value on set
   transformSet: (path, value) => {
-    if (path === "boo") {
-      // override whatever the value was being sent to and instead return "boo"
+    if (path[path.length - 1] === "boo") {
+      // override whatever value was being set
       return "AHHH"
     }
     return value
   },
 
-  canProxy: (value, prev) => {
-    // return a boolean value to tell valtio whether or not to proxy that object
+  // Control what gets proxied
+  canProxy: (value, defaultCanProxy) => {
+    // return false to prevent proxying
     if (typeof value === 'number') {
       return false
     }
-    return prev(value)
+    return defaultCanProxy(value)
   },
   
   // Called when factory is disposed
@@ -251,11 +256,14 @@ const analyticsPlugin: ValtioPlugin = {
 
 proxy.use(analyticsPlugin)
 
-// Access with full TypeScript autocomplete
+// Access with full TypeScript autocomplete - both patterns work:
 proxy.analytics.track('user_signup', { plan: 'pro' })
 proxy.analytics.identify('user123')
 proxy.analytics.events.pageView('/dashboard')
 proxy.analytics.config.debug = false
+
+// OR use the plugin reference directly:
+analyticsPlugin.track('user_signup', { plan: 'pro' })
 ```
 
 ## 🏗️ Advanced Plugin Examples
@@ -264,7 +272,7 @@ proxy.analytics.config.debug = false
 
 ```typescript
 const createSmartLogger = (): ValtioPlugin => {
-  let proxyFactory: any = null
+  let proxyFactory: ProxyFactory | null = null
   const logs: any[] = []
   
   return {
@@ -298,17 +306,23 @@ const createSmartLogger = (): ValtioPlugin => {
       return proxyFactory({
         logs: [],
         filter: '',
-        refresh: () => {
-          // Access logs from main plugin
+        refresh: function() {
           this.logs = [...logs]
         }
       })
     }
   }
 }
+
+// Usage
+const logger = createSmartLogger()
+proxy.use(logger)
+
+// Access methods via reference
+const viewer = logger.createLogViewer()
 ```
 
-### Persistence Plugin
+### Simple Persistence Plugin (see [valtio-persist-plugin](https://gihtub.com/valtiojs/valtio-persist-plugin) for a production implementation)
 
 ```typescript
 const createPersistencePlugin = (storageKey: string): ValtioPlugin => {
@@ -320,16 +334,16 @@ const createPersistencePlugin = (storageKey: string): ValtioPlugin => {
     },
     
     afterChange: (path, value, state) => {
-      // Auto-save after changes
-      this.save()
+      // Auto-save after changes - access via 'this'
+      this.save(state)
     },
     
     onDispose: () => {
-      this.save() // Final save
+      // Final save handled by consumer
     },
     
     // Plugin API
-    save: () => {
+    save: (state) => {
       try {
         const snapshot = proxy.snapshot(state)
         localStorage.setItem(storageKey, JSON.stringify(snapshot))
@@ -357,18 +371,22 @@ const createPersistencePlugin = (storageKey: string): ValtioPlugin => {
 }
 
 // Usage
-proxy.use(createPersistencePlugin('my-app-state'))
+const persist = createPersistencePlugin('my-app-state')
+proxy.use(persist)
 
 const store = proxy({ count: 0, name: 'John' })
 
 // Auto-loads saved state
-const savedState = proxy.persistence.load()
+const savedState = persist.load()
 if (savedState) {
   Object.assign(store, savedState)
 }
 
 // Changes are auto-saved
 store.count++ // Automatically persisted
+
+// Manual operations
+persist.clear()
 ```
 
 ### Validation Plugin
@@ -396,7 +414,7 @@ const createValidationPlugin = (): ValtioPlugin => {
       
       // Email validation
       if (pathKey.includes('email') && value) {
-        const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
         if (!emailRegex.test(value)) {
           fieldErrors.push('Invalid email format')
         }
@@ -423,10 +441,22 @@ const createValidationPlugin = (): ValtioPlugin => {
     
     validateField: (path: string, value: any) => {
       // Manual validation
-      return !this.getErrors()[path]
+      return !errors.has(path)
     }
   }
 }
+
+// Usage
+const validation = createValidationPlugin()
+proxy.use(validation)
+
+const store = proxy({ email: '', name: '' })
+
+store.email = 'invalid' // ❌ Prevented
+console.log(validation.getErrors()) // { email: ['Invalid email format'] }
+
+store.email = 'user@example.com' // ✅ Allowed
+console.log(validation.hasErrors()) // false
 ```
 
 ## 🔄 Method Chaining
@@ -436,11 +466,15 @@ Chain plugin registrations and method calls:
 ```typescript
 import { proxy } from 'valtio'
 
+const logger = createLoggingPlugin()
+const validation = createValidationPlugin()
+const persist = createPersistencePlugin('app')
+
 // Chain plugin registration
 proxy
-  .use(loggingPlugin)
-  .use(validationPlugin)
-  .use(persistencePlugin)
+  .use(logger)
+  .use(validation)
+  .use(persist)
 
 // Method chaining returns the proxy for fluent API
 const result = proxy
@@ -459,17 +493,25 @@ Create reusable factory configurations:
 ```typescript
 // Create configured factories
 const createDebugFactory = () => {
+  const logger = createLoggingPlugin({ debug: true })
+  const validation = createValidationPlugin()
+  const analytics = createAnalyticsPlugin({ debug: true })
+  
   return proxy.createInstance()
-    .use(createLoggingPlugin({ debug: true }))
-    .use(createValidationPlugin())
-    .use(createAnalyticsPlugin({ debug: true }))
+    .use(logger)
+    .use(validation)
+    .use(analytics)
 }
 
 const createProductionFactory = () => {
+  const persist = createPersistencePlugin('prod-state')
+  const validation = createValidationPlugin()
+  const analytics = createAnalyticsPlugin({ debug: false })
+  
   return proxy.createInstance()
-    .use(createPersistencePlugin('prod-state'))
-    .use(createValidationPlugin())
-    .use(createAnalyticsPlugin({ debug: false }))
+    .use(persist)
+    .use(validation)
+    .use(analytics)
 }
 
 // Use in different environments
@@ -486,12 +528,14 @@ Perfect integration with Valtio's React hooks:
 
 ```jsx
 import { useSnapshot } from 'valtio/react'
-import { proxy } from 'valtio'
-import 'valtio-plugin'
+import { proxy }'valtio-plugin' // augmented proxy
 
-// Set up global plugins
-proxy.use(createLoggingPlugin())
-proxy.use(createPersistencePlugin('app-state'))
+// Set up plugins
+const logger = createLoggingPlugin()
+const persist = createPersistencePlugin('app-state')
+
+proxy.use(logger)
+proxy.use(persist)
 
 const store = proxy({
   count: 0,
@@ -501,7 +545,7 @@ const store = proxy({
 })
 
 // Load persisted state
-const saved = proxy.persistence.load()
+const saved = persist.load()
 if (saved) Object.assign(store, saved)
 
 function Counter() {
@@ -513,7 +557,7 @@ function Counter() {
       <button onClick={snap.increment}>+</button>
       <button onClick={snap.decrement}>-</button>
       <button onClick={snap.reset}>Reset</button>
-      <button onClick={() => proxy.persistence.clear()}>
+      <button onClick={() => persist.clear()}>
         Clear Storage
       </button>
     </div>
@@ -525,11 +569,10 @@ function Counter() {
 
 ### Global Proxy Methods
 
-These methods are available on the global `proxy` import from 'valtio':
+These methods are available on the augmented global `proxy` imported from 'valtio-plugin':
 
 ```typescript
-import { proxy } from 'valtio'
-import 'valtio-plugin'
+import { proxy } from 'valtio-plugin'
 
 // Plugin management
 proxy.use(plugin | plugins[])     // Register global plugins
@@ -544,8 +587,11 @@ proxy.createInstance()           // Create new factory instance
 proxy.subscribe(obj, callback)   // Subscribe with plugin hooks
 proxy.snapshot(obj)             // Snapshot with plugin hooks
 
-// Plugin access
+// Plugin access (both patterns work)
 proxy[pluginId]                 // Access plugin by ID
+const plugin = createMyPlugin()
+proxy.use(plugin)
+plugin.method()                 // Access via reference
 ```
 
 ### Instance Factory Methods
@@ -566,8 +612,9 @@ instance(initialState)          // Create proxy with plugins
 instance.subscribe(obj, cb)     // Subscribe with hooks
 instance.snapshot(obj)         // Snapshot with hooks
 
-// Plugin access
+// Plugin access (both patterns work)
 instance[pluginId]             // Access plugin by ID
+plugin.method()                // Access via reference
 ```
 
 ### ValtioPlugin Interface
@@ -586,9 +633,10 @@ interface ValtioPlugin {
   onSnapshot?: (snapshot) => void
   onDispose?: () => void
   onGet?: (path: string[], value: unknown, state: object) => void
+  onGetRaw?: (target: object, prop: string | symbol, receiver: unknown, value: unknown) => void
   transformGet?: (path: string[], value: unknown, state: object) => unknown | void
   transformSet?: (path: string[], value: unknown, state: object) => unknown | void
-  canProxy?: (value: unknown) => boolean | undefined
+  canProxy?: (value: unknown, defaultCanProxy: (value: unknown) => boolean) => boolean | undefined
   
   // Custom properties (plugin API)
   [key: string]: unknown
@@ -627,16 +675,18 @@ const createMyPlugin = (options = {}) => {
     },
 
     transformGet: (path, value) => {
-      // Use this if you need to send special values back when a property is accessed
+      // Transform value when accessed
+      return value
     },
 
     transformSet: (path, value) => {
-      // Use this to transform a value while it is being set
+      // Transform value before setting
+      return value
     },
 
-    canProxy: (value) => {
-      // You can use this to overwrite the default canProxy global function from valtio
-      // This can either be place on the global proxy object or on instances
+    canProxy: (value, defaultCanProxy) => {
+      // Control what gets proxied
+      return defaultCanProxy(value)
     },
     
     onDispose: () => {
@@ -659,6 +709,7 @@ const createMyPlugin = (options = {}) => {
 4. **Use onDispose**: Clean up timers, subscriptions, etc.
 5. **Type your plugins**: Export TypeScript interfaces
 6. **Document your API**: Clear method names and documentation
+7. **Keep references**: Store plugin references for easier access to methods
 
 ### Publishing Plugins
 
@@ -680,10 +731,17 @@ export const createMyPlugin = (options = {}): MyPluginAPI => {
 }
 
 // Usage by consumers
-import { proxy } from 'valtio'
+import { proxy } from 'valtio-plugin'
 import { createMyPlugin } from 'my-valtio-plugin'
 
-proxy.use(createMyPlugin({ enabled: true }))
+const myPlugin = createMyPlugin({ enabled: true })
+proxy.use(myPlugin)
+
+// Access via reference (recommended)
+myPlugin.doSomething()
+
+// Or via proxy
+proxy['my-plugin'].doSomething()
 ```
 
 ## 🚀 Examples
@@ -709,10 +767,6 @@ npm install valtio valtio-plugin
 ## 📄 License
 
 MIT
-
-## 🤝 Contributing
-
-Contributions welcome! Please read our contributing guidelines and submit pull requests to improve the plugin system.
 
 ---
 
