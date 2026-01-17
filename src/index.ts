@@ -1376,7 +1376,7 @@ Object.defineProperty(augmentedProxy, "use", {
 	configurable: true,
 })
 
-export const proxy = augmentedProxy
+export const proxy: EnhancedGlobalProxy = augmentedProxy as EnhancedGlobalProxy
 exportedProxy = proxy
 
 export { proxy as enhancedProxy }
